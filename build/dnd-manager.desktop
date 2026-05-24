@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=DnD Manager
+Comment=Tabletop campaign tracker
+Exec=/path/to/DnDManager
+Icon=applications-games
+Type=Application
+Categories=Game;
