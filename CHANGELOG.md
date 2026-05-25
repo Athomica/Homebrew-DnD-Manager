@@ -1,5 +1,67 @@
 # DnD Manager Changelog
 
+## v3.5 — Encounter UX streamline
+
+No mechanical changes. Everything works the same; the encounter tab is
+just less cluttered.
+
+### Encounter tab chrome
+- The old top toolbar row (Start / Encounter name / Begin Combat / End
+  Encounter) is **gone**. Per-encounter actions live on the tab strip
+  itself:
+  - **X** on a tab = End Encounter (with confirmation).
+  - **Double-click** a tab = rename inline.
+  - **Right-click** a tab = context menu (Rename, Begin Combat, End).
+- **"+ Start Encounter" call-to-action** fills the middle column when
+  there are no encounters yet.
+- **Begin Combat is a prominent green button at the top of the roster**,
+  enabled only when at least one participant is placed. Workflow flows
+  top-to-bottom without a separate toolbar row.
+
+### Encounter Bin → collapsed drawer
+- Single-line clickable header: `▸ Encounter Bin (0)`.
+- Header turns **amber and bold** when something is in the bin, so it
+  remains discoverable even with the drawer closed.
+
+### Compact character card: 6 sub-tabs → 3
+- **Now** — vitals, DICE, combat numbers, fall.
+- **Gear** — Equipment + Inventory (with `⚔ Equipment` / `🎒 Inventory`
+  colored sub-headers).
+- **Sheet** — Stats + Passives + Forms (with `📊 Stats`, `✨ Passives`,
+  `🐺 Forms`).
+- Cycle arrows (`◀ prev` / `1/1` / `next ▶`) are always shown — even with
+  one participant — so the layout doesn't jump when a second joins.
+
+### Combat numbers strip
+- The 8-row "Combat numbers" grid collapsed into a **single horizontal
+  strip with three color groups**:
+  - Red caps `MAR / RNG / ARC / STH` (offense)
+  - Blue caps `DEF / DOD` (defense)
+  - Magenta caps `HP↓ / HP↓sh` (HP loss)
+- Visual dividers between groups. White numeric values; bold colored
+  abbreviations.
+
+### Dice field
+- **Compact** outside conflict (small font, muted blue background).
+- **Expands & glows** when a conflict is active (bigger font, brighter
+  blue, accent border). It's the thing you read most during a conflict,
+  so it visibly takes over.
+
+### Conflict resolution panel
+- Action radios → **segmented button bar** (`⚔ Attack · 🛡 Block ·
+  🔮 Cast · ⚡ Dodge · 🔄 Shift`), color-coded per action when selected.
+- The three old sub-control rows (ATK type / Use shield / Shift form)
+  collapsed into **one `QStackedWidget` pane** — only the relevant
+  control shows, and the panel doesn't jump in height when you change
+  action.
+- The 4 outcome labels (Dealt / Recv / SP / MP) merged into a **single
+  rich-text outcome row** per side, color-coded inline.
+- Each side's header gets a colored **action chip** (`⚔ Attack`,
+  `🛡 Block`, etc.) next to the character name, so the chosen action is
+  visible without reading the segmented bar.
+
+---
+
 ## v3.4.5 — Shapeshift is an action; costs 100 mana
 
 - **Shapeshifting always costs 100 mana.** If you don't have it, a dialog

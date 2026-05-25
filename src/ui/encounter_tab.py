@@ -91,18 +91,23 @@ class CompactCharacterCard(QFrame):
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(6)
 
-        # Cycle arrows (above the rest of the card)
-        if total > 1:
-            arrows_row = QHBoxLayout()
-            arrows_row.setSpacing(4)
-            up = QPushButton("◀ prev"); up.setFixedHeight(26)
-            up.clicked.connect(lambda: self.arrows_clicked.emit(-1))
-            arrows_row.addWidget(up)
-            arrows_row.addWidget(QLabel(f"  {current_idx + 1} / {total}  "), 1)
-            dn = QPushButton("next ▶"); dn.setFixedHeight(26)
-            dn.clicked.connect(lambda: self.arrows_clicked.emit(+1))
-            arrows_row.addWidget(dn)
-            outer.addLayout(arrows_row)
+        # v3.4.6: cycle arrows always present so the layout doesn't shift
+        # when a second participant joins; disabled when there's only one.
+        arrows_row = QHBoxLayout()
+        arrows_row.setSpacing(4)
+        up = QPushButton("◀ prev"); up.setFixedHeight(26)
+        up.setEnabled(total > 1)
+        up.clicked.connect(lambda: self.arrows_clicked.emit(-1))
+        arrows_row.addWidget(up)
+        idx_lbl = QLabel(f"  {current_idx + 1} / {max(1, total)}  ")
+        idx_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        idx_lbl.setStyleSheet("color: #8a8a8a;")
+        arrows_row.addWidget(idx_lbl, 1)
+        dn = QPushButton("next ▶"); dn.setFixedHeight(26)
+        dn.setEnabled(total > 1)
+        dn.clicked.connect(lambda: self.arrows_clicked.emit(+1))
+        arrows_row.addWidget(dn)
+        outer.addLayout(arrows_row)
 
         # Header strip: name, turn, remove
         header = QFrame()
@@ -127,22 +132,18 @@ class CompactCharacterCard(QFrame):
         hl.addWidget(rm)
         outer.addWidget(header)
 
-        # Big separated DICE field — always visible above the tabs.
-        dice_frame = QFrame()
-        dice_frame.setStyleSheet(
-            "QFrame { background-color: #1d2638; border-radius: 6px; }")
-        dl = QHBoxLayout(dice_frame)
-        dl.setContentsMargins(10, 6, 10, 6); dl.setSpacing(8)
-        dt = QLabel("DICE:")
-        f = dt.font(); f.setPointSize(f.pointSize() + 2); f.setBold(True); dt.setFont(f)
-        dl.addWidget(dt)
+        # v3.4.6: DICE field — compact normally, expands prominently during
+        # a conflict (since that's when it matters most).
+        self._dice_frame = QFrame()
+        self._dice_frame.setObjectName("DiceFrame")
+        dl = QHBoxLayout(self._dice_frame)
+        dl.setContentsMargins(10, 4, 10, 4); dl.setSpacing(8)
+        self._dice_title = QLabel("DICE:")
+        dl.addWidget(self._dice_title)
         self._dice_in = NoWheelSpinBox()
         self._dice_in.setKeyboardTracking(False)
         self._dice_in.setRange(1, 20)
         self._dice_in.setValue(instance.character.dice)
-        self._dice_in.setFixedHeight(36); self._dice_in.setMinimumWidth(80)
-        df = self._dice_in.font(); df.setPointSize(df.pointSize() + 5); df.setBold(True)
-        self._dice_in.setFont(df)
         self._dice_in.editingFinished.connect(self._on_dice_commit)
         dl.addWidget(self._dice_in)
         self._dice_log = QLabel("(no rolls yet)")
@@ -150,7 +151,9 @@ class CompactCharacterCard(QFrame):
         self._dice_log.setMinimumWidth(100)
         dl.addWidget(self._dice_log)
         dl.addStretch(1)
-        outer.addWidget(dice_frame)
+        outer.addWidget(self._dice_frame)
+        # Apply the initial (compact) styling.
+        self._apply_dice_style(in_conflict=False)
 
         # The tab strip
         self._tabs = QTabWidget()
@@ -158,13 +161,28 @@ class CompactCharacterCard(QFrame):
         self._tabs.setTabPosition(QTabWidget.TabPosition.North)
         outer.addWidget(self._tabs, 1)
 
-        self._build_combat_tab()
-        self._build_equipment_tab()
-        self._build_inventory_tab()
-        self._build_stats_tab()
-        self._build_passives_tab()
-        if instance.character.is_shapeshifter or instance.character.forms:
-            self._build_forms_tab()
+        # v3.4.6: 6 sub-tabs collapsed into 3 — "Now" for the things you
+        # actually read during combat, "Gear" for equipment + inventory,
+        # "Sheet" for slower edits (stats, passives, forms).
+        combat = self._build_combat_tab()
+        equipment = self._build_equipment_tab()
+        inventory = self._build_inventory_tab()
+        stats = self._build_stats_tab()
+        passives = self._build_passives_tab()
+        forms = (self._build_forms_tab()
+                  if (instance.character.is_shapeshifter
+                      or instance.character.forms) else None)
+
+        gear = self._make_grouped_tab(
+            [("⚔  Equipment", equipment), ("🎒  Inventory", inventory)])
+        sheet_sections = [("📊  Stats", stats), ("✨  Passives", passives)]
+        if forms is not None:
+            sheet_sections.append(("🐺  Forms", forms))
+        sheet = self._make_grouped_tab(sheet_sections)
+
+        self._tabs.addTab(combat, "Now")
+        self._tabs.addTab(gear, "Gear")
+        self._tabs.addTab(sheet, "Sheet")
 
         # v3.4: listen to character_changed and lists_changed too, so things
         # like fall damage, spell lists, and equipment swaps reflect in real
@@ -208,6 +226,56 @@ class CompactCharacterCard(QFrame):
         if not ok:
             QMessageBox.information(self, "Turn constraint", msg)
 
+    def _make_grouped_tab(self, sections: list) -> QWidget:
+        """v3.4.6: wrap multiple sections in a single tab with colored
+        sub-headers. Each section gets a 'role' chip header above its
+        content, so the user can see groupings at a glance."""
+        from PyQt6.QtWidgets import QScrollArea
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        # Inventory + form lists can grow tall; wrap in a scroll area so
+        # individual sections aren't capped at the card's height.
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(4, 4, 4, 4); v.setSpacing(10)
+        for label_text, section in sections:
+            header = QLabel(label_text)
+            header.setStyleSheet(
+                "background-color: #2a3445; color: #aacfff; "
+                "padding: 4px 8px; border-radius: 4px; font-weight: bold;")
+            v.addWidget(header)
+            section.setStyleSheet(
+                "QWidget { background: transparent; }")
+            v.addWidget(section)
+        v.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
+        return wrap
+
+    def _apply_dice_style(self, in_conflict: bool) -> None:
+        """v3.4.6: DICE is small when prepping/placing turns and emphasized
+        during a conflict. Color also shifts to draw the eye."""
+        if in_conflict:
+            self._dice_frame.setStyleSheet(
+                "QFrame#DiceFrame { background-color: #2a3556; "
+                "border: 2px solid #4a72d7; border-radius: 6px; }")
+            self._dice_title.setStyleSheet(
+                "color: #aacfff; font-weight: bold; font-size: 14pt;")
+            df = self._dice_in.font(); df.setPointSize(16); df.setBold(True)
+            self._dice_in.setFont(df)
+            self._dice_in.setFixedHeight(40); self._dice_in.setMinimumWidth(96)
+        else:
+            self._dice_frame.setStyleSheet(
+                "QFrame#DiceFrame { background-color: #1d2638; border-radius: 4px; }")
+            self._dice_title.setStyleSheet(
+                "color: #cccccc; font-weight: bold; font-size: 11pt;")
+            df = self._dice_in.font(); df.setPointSize(11); df.setBold(False)
+            self._dice_in.setFont(df)
+            self._dice_in.setFixedHeight(28); self._dice_in.setMinimumWidth(70)
+
     def _on_dice_commit(self) -> None:
         # v3.4.2: defer the mutation so the state change + chained refresh
         # runs after the QSpinBox editingFinished handler returns, not inside
@@ -250,28 +318,48 @@ class CompactCharacterCard(QFrame):
         self._mana_bar.max_input.valueChanged.connect(
             lambda val: self._set_field("mana_max", val))
 
-        # Combat stats grid
-        stats = QGroupBox("Combat numbers")
-        g = QGridLayout(stats); g.setHorizontalSpacing(20); g.setVerticalSpacing(4)
-        g.setContentsMargins(8, 14, 8, 6)
+        # v3.4.6: combat numbers as a single horizontal strip with color
+        # categories (red = offense, blue = defense, magenta = HP loss).
         self._martial_lbl = QLabel("0"); self._ranged_lbl = QLabel("0")
         self._arcana_lbl = QLabel("0"); self._stealth_lbl = QLabel("0")
         self._def_lbl = QLabel("0"); self._dodge_lbl = QLabel("0")
         self._hploss_lbl = QLabel("0"); self._sh_hploss_lbl = QLabel("0")
-        for w in (self._martial_lbl, self._ranged_lbl, self._arcana_lbl,
-                  self._stealth_lbl, self._def_lbl, self._dodge_lbl):
-            w.setProperty("role", "big")
-        g.addWidget(QLabel("Martial:"), 0, 0); g.addWidget(self._martial_lbl, 0, 1)
-        g.addWidget(QLabel("Ranged:"), 0, 2); g.addWidget(self._ranged_lbl, 0, 3)
-        g.addWidget(QLabel("Arcana:"), 1, 0); g.addWidget(self._arcana_lbl, 1, 1)
-        g.addWidget(QLabel("Stealth:"), 1, 2); g.addWidget(self._stealth_lbl, 1, 3)
-        g.addWidget(QLabel("DEF:"), 2, 0); g.addWidget(self._def_lbl, 2, 1)
-        g.addWidget(QLabel("Dodge:"), 2, 2); g.addWidget(self._dodge_lbl, 2, 3)
-        g.addWidget(QLabel("HP loss (no shield):"), 3, 0, 1, 2)
-        g.addWidget(self._hploss_lbl, 3, 2)
-        g.addWidget(QLabel("Shielded HP loss:"), 4, 0, 1, 2)
-        g.addWidget(self._sh_hploss_lbl, 4, 2)
-        v.addWidget(stats)
+        strip = QFrame()
+        strip.setStyleSheet(
+            "QFrame { background-color: #181818; border-radius: 4px; }")
+        sl = QHBoxLayout(strip)
+        sl.setContentsMargins(6, 4, 6, 4); sl.setSpacing(0)
+
+        def _chip(lbl_text, val_lbl, color):
+            box = QHBoxLayout(); box.setSpacing(3)
+            cap = QLabel(lbl_text)
+            cap.setStyleSheet(f"color: {color}; font-size: 9pt; font-weight: bold;")
+            val_lbl.setStyleSheet(f"color: #ffffff; font-size: 11pt; "
+                                   "font-weight: bold;")
+            box.addWidget(cap); box.addWidget(val_lbl)
+            w = QWidget(); w.setLayout(box)
+            return w
+
+        offense_color = "#e07070"
+        defense_color = "#70a4e0"
+        hp_color = "#d460a0"
+        sl.addWidget(_chip("MAR", self._martial_lbl, offense_color))
+        sl.addWidget(_chip("RNG", self._ranged_lbl, offense_color))
+        sl.addWidget(_chip("ARC", self._arcana_lbl, offense_color))
+        sl.addWidget(_chip("STH", self._stealth_lbl, offense_color))
+        # Visual divider
+        div = QFrame(); div.setFrameShape(QFrame.Shape.VLine)
+        div.setStyleSheet("background-color: #333; max-width: 1px;")
+        sl.addWidget(div)
+        sl.addWidget(_chip("DEF", self._def_lbl, defense_color))
+        sl.addWidget(_chip("DOD", self._dodge_lbl, defense_color))
+        div2 = QFrame(); div2.setFrameShape(QFrame.Shape.VLine)
+        div2.setStyleSheet("background-color: #333; max-width: 1px;")
+        sl.addWidget(div2)
+        sl.addWidget(_chip("HP↓", self._hploss_lbl, hp_color))
+        sl.addWidget(_chip("HP↓sh", self._sh_hploss_lbl, hp_color))
+        sl.addStretch(1)
+        v.addWidget(strip)
 
         # Fall height + checkbox
         fall_row = QHBoxLayout(); fall_row.setSpacing(8)
@@ -296,7 +384,7 @@ class CompactCharacterCard(QFrame):
         v.addLayout(fall_row)
 
         v.addStretch(1)
-        self._tabs.addTab(tab, "Combat")
+        return tab
 
     def _on_apply_fall_toggled(self, checked: bool) -> None:
         enc = self._state.state.active_encounter
@@ -358,7 +446,7 @@ class CompactCharacterCard(QFrame):
         self._armor_total_lbl.setProperty("role", "big")
         f.addRow("Total armor:", self._armor_total_lbl)
 
-        self._tabs.addTab(tab, "Equipment")
+        return tab
 
     def _on_equip_change(self, slot: str, combo: NoWheelComboBox) -> None:
         # v3.4.2: deferred for the same Qt-popup-still-open reason as
@@ -430,7 +518,7 @@ class CompactCharacterCard(QFrame):
         self._inv_summary.setProperty("role", "dim")
         v.addWidget(self._inv_summary)
 
-        self._tabs.addTab(tab, "Inventory")
+        return tab
 
     def _on_use_selected_item(self) -> None:
         row = self._inv_list.currentRow()
@@ -524,7 +612,7 @@ class CompactCharacterCard(QFrame):
         f.addRow("SP earned (this combat):", self._sp_earned_lbl)
         self._unalloc_lbl = QLabel("0")
         f.addRow("Unallocated SP:", self._unalloc_lbl)
-        self._tabs.addTab(tab, "Stats")
+        return tab
 
     # -- tab: Passives ---------------------------------------------
     def _build_passives_tab(self) -> None:
@@ -542,7 +630,7 @@ class CompactCharacterCard(QFrame):
         self._passive_editor.changed.connect(
             lambda: self._state.character_changed.emit(
                 self._instance.character.id))
-        self._tabs.addTab(tab, "Passives")
+        return tab
 
     # -- tab: Forms --------------------------------------------------
     def _build_forms_tab(self) -> None:
@@ -576,7 +664,7 @@ class CompactCharacterCard(QFrame):
         rm_b.clicked.connect(self._on_remove_form)
         btns.addWidget(add_b); btns.addWidget(rm_b); btns.addStretch(1)
         v.addLayout(btns)
-        self._tabs.addTab(tab, "Forms")
+        return tab
 
     def _on_active_form_changed(self, _i: int) -> None:
         from PyQt6.QtCore import QTimer
@@ -858,6 +946,8 @@ class CompactCharacterCard(QFrame):
             self._use_item_btn.setToolTip(
                 "Items can't be used during a conflict. Resolve or exit "
                 "the conflict first." if in_conflict else "")
+        # v3.4.6: dice prominence reflects whether we're in a conflict.
+        self._apply_dice_style(in_conflict)
 
 
 # ---------------------------------------------------------------------------
@@ -923,39 +1013,72 @@ class ConflictPanel(QGroupBox):
         s.setStyleSheet("background-color: #333333; max-height: 1px;")
         return s
 
-    def _build_side(self, side: str) -> dict:
-        # v3.4: each side gets a wrapping QGroupBox so the panel can lay them
-        # out vertically and still keep visual separation.
-        box = QGroupBox(side.title())
-        layout = QVBoxLayout(box); layout.setSpacing(4)
-        layout.setContentsMargins(8, 14, 8, 6)
-        name_lbl = QLabel("(no character)"); name_lbl.setProperty("role", "header")
-        layout.addWidget(name_lbl)
+    # v3.4.6: action icon + accent color per action — icons give a quick
+    # visual signal in the segmented button bar AND in side header chips.
+    ACTION_META = {
+        "attack": ("⚔", "Attack", "#d96666"),
+        "block":  ("🛡", "Block",  "#5a8ad0"),
+        "cast":   ("🔮", "Cast",   "#c46ad6"),
+        "dodge":  ("⚡", "Dodge",  "#d6c46a"),
+        "shift":  ("🔄", "Shift",  "#6acf9a"),
+    }
 
-        # Action row — 4 radios in a flow.
+    def _build_side(self, side: str) -> dict:
+        from PyQt6.QtWidgets import QStackedWidget
+        box = QGroupBox(side.title())
+        layout = QVBoxLayout(box); layout.setSpacing(6)
+        layout.setContentsMargins(8, 14, 8, 8)
+        name_lbl = QLabel("(no character)")
+        name_lbl.setStyleSheet("font-size: 13pt; font-weight: bold;")
+        action_chip = QLabel("")
+        action_chip.setStyleSheet("padding: 2px 6px; border-radius: 3px;")
+        name_row = QHBoxLayout()
+        name_row.setSpacing(6)
+        name_row.addWidget(name_lbl); name_row.addStretch(1)
+        name_row.addWidget(action_chip)
+        layout.addLayout(name_row)
+
+        # v3.4.6: Action picker as a segmented button bar (checkable
+        # QPushButtons in a row, no gap, accent color when selected).
         action_group = QButtonGroup(box)
-        action_radios: dict[str, QRadioButton] = {}
+        action_group.setExclusive(True)
+        action_buttons: dict[str, QPushButton] = {}
         action_row = QHBoxLayout()
-        action_row.setSpacing(4)
+        action_row.setSpacing(0)
         for key, label in ACTIONS:
-            rb = QRadioButton(label)
-            action_group.addButton(rb)
-            action_radios[key] = rb
-            # v3.4: direct mutation, no refresh-loop. The refresh handler
-            # below only updates derived numbers.
-            rb.toggled.connect(self._on_action_toggled_factory(side, key))
-            action_row.addWidget(rb)
-        action_row.addStretch(1)
-        # Initial selection — block signals so we don't fire refresh() before
-        # the second column even exists.
-        action_radios["attack"].blockSignals(True)
-        action_radios["attack"].setChecked(True)
-        action_radios["attack"].blockSignals(False)
+            icon, _name, accent = self.ACTION_META[key]
+            btn = QPushButton(f"{icon} {label}")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                "QPushButton { padding: 6px 4px; background-color: #222; "
+                "color: #aaa; border: 1px solid #333; border-radius: 0; }"
+                "QPushButton:hover { background-color: #2a2a2a; color: #ddd; }"
+                f"QPushButton:checked {{ background-color: {accent}; "
+                "color: #1a1a1a; font-weight: bold; "
+                f"border-color: {accent}; }}")
+            action_group.addButton(btn)
+            action_buttons[key] = btn
+            btn.toggled.connect(self._on_action_toggled_factory(side, key))
+            action_row.addWidget(btn, 1)
+        action_buttons["attack"].blockSignals(True)
+        action_buttons["attack"].setChecked(True)
+        action_buttons["attack"].blockSignals(False)
+        # Round the outer corners of the leftmost / rightmost buttons.
+        first = action_buttons["attack"]
+        last = action_buttons["shift"]
+        first.setStyleSheet(first.styleSheet() + "\nQPushButton { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }")
+        last.setStyleSheet(last.styleSheet() + "\nQPushButton { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }")
         layout.addLayout(action_row)
 
-        # ATK type sub-radios (visible only when action == "attack")
-        atk_box = QFrame()
-        atk_l = QHBoxLayout(atk_box); atk_l.setContentsMargins(16, 0, 0, 0)
+        # v3.4.6: ONE sub-control row, swapped via QStackedWidget so the
+        # panel height doesn't jump when the action changes.
+        sub_stack = QStackedWidget()
+        sub_stack.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                  QSizePolicy.Policy.Fixed)
+        # Pane 0: ATK type radios (for Attack)
+        atk_pane = QFrame()
+        atk_l = QHBoxLayout(atk_pane); atk_l.setContentsMargins(8, 4, 8, 4)
         atk_l.setSpacing(4)
         atk_group = QButtonGroup(box)
         atk_radios: dict[str, QRadioButton] = {}
@@ -969,52 +1092,51 @@ class ConflictPanel(QGroupBox):
         atk_radios["martial"].blockSignals(True)
         atk_radios["martial"].setChecked(True)
         atk_radios["martial"].blockSignals(False)
-        layout.addWidget(atk_box)
-
-        # v3.4.4: "Use shield" sub-option (visible only when action == "block").
-        shield_box = QFrame()
-        shield_l = QHBoxLayout(shield_box); shield_l.setContentsMargins(16, 0, 0, 0)
-        use_shield_chk = QCheckBox("Use shield (apply damage_negation + block cost)")
+        sub_stack.addWidget(atk_pane)  # index 0
+        # Pane 1: Use shield (for Block)
+        shield_pane = QFrame()
+        shield_l = QHBoxLayout(shield_pane); shield_l.setContentsMargins(8, 4, 8, 4)
+        use_shield_chk = QCheckBox("Use shield (damage_negation + block cost)")
         use_shield_chk.setChecked(True)
         use_shield_chk.toggled.connect(self._on_use_shield_factory(side))
         shield_l.addWidget(use_shield_chk)
         shield_l.addStretch(1)
-        layout.addWidget(shield_box)
-
-        # v3.4.5: Shift sub-option — pick which form to switch into.
-        shift_box = QFrame()
-        shift_l = QHBoxLayout(shift_box); shift_l.setContentsMargins(16, 0, 0, 0)
+        sub_stack.addWidget(shield_pane)  # index 1
+        # Pane 2: empty (for Cast / Dodge — no sub-options needed)
+        empty_pane = QFrame()
+        QHBoxLayout(empty_pane).setContentsMargins(0, 0, 0, 0)
+        sub_stack.addWidget(empty_pane)  # index 2
+        # Pane 3: form picker (for Shift)
+        shift_pane = QFrame()
+        shift_l = QHBoxLayout(shift_pane); shift_l.setContentsMargins(8, 4, 8, 4)
         shift_l.addWidget(QLabel("Shift to:"))
         form_combo = NoWheelComboBox()
         form_combo.currentIndexChanged.connect(
             self._on_shift_form_factory(side, form_combo))
         shift_l.addWidget(form_combo, 1)
-        shift_cost_lbl = QLabel("(100 mana)")
-        shift_cost_lbl.setProperty("role", "dim")
+        shift_cost_lbl = QLabel("· 100 mana")
+        shift_cost_lbl.setStyleSheet("color: #4a9ad7;")
         shift_l.addWidget(shift_cost_lbl)
-        layout.addWidget(shift_box)
+        sub_stack.addWidget(shift_pane)  # index 3
+        layout.addWidget(sub_stack)
 
-        # Outcome labels (always shown, smaller text so they fit a 1/3 column)
-        dmg_dealt = QLabel("Damage dealt:   -")
-        dmg_dealt.setStyleSheet("color: #44af69; font-weight: bold;")
-        dmg_recv = QLabel("Damage received:   -")
-        dmg_recv.setStyleSheet("color: #f72c25; font-weight: bold;")
-        stam_cost = QLabel("Stamina cost:   -")
-        stam_cost.setStyleSheet("color: #f72c25;")
-        mana_cost = QLabel("Mana cost:   -")
-        mana_cost.setStyleSheet("color: #4a9ad7;")
-        for lbl in (dmg_dealt, dmg_recv, stam_cost, mana_cost):
-            lbl.setWordWrap(True)
-            layout.addWidget(lbl)
+        # v3.4.6: inline outcome row — dealt / received / SP / MP on a single
+        # rich-text label so they all fit in the third-width column.
+        outcome = QLabel("")
+        outcome.setWordWrap(True)
+        outcome.setTextFormat(Qt.TextFormat.RichText)
+        outcome.setStyleSheet(
+            "padding: 6px; background-color: #181818; border-radius: 4px;")
+        layout.addWidget(outcome)
 
         return {
             "side": side, "box": box, "name_lbl": name_lbl,
-            "action_radios": action_radios, "atk_radios": atk_radios,
-            "atk_box": atk_box,
-            "shield_box": shield_box, "use_shield_chk": use_shield_chk,
-            "shift_box": shift_box, "form_combo": form_combo,
-            "dmg_dealt": dmg_dealt, "dmg_recv": dmg_recv,
-            "stam_cost": stam_cost, "mana_cost": mana_cost,
+            "action_chip": action_chip,
+            "action_radios": action_buttons, "atk_radios": atk_radios,
+            "sub_stack": sub_stack,
+            "use_shield_chk": use_shield_chk,
+            "form_combo": form_combo,
+            "outcome": outcome,
         }
 
     def _on_shift_form_factory(self, side: str, combo: NoWheelComboBox):
@@ -1083,31 +1205,39 @@ class ConflictPanel(QGroupBox):
             self._left_col["name_lbl"].objectName()
         except RuntimeError:
             return
+        # v3.4.6: stash side-locals so we can render the inline outcome row
+        # after computing both side's outgoing damages.
+        side_data: dict[str, dict] = {}
         for side, col in (("left", self._left_col), ("right", self._right_col)):
             inst = self._state.active_instance(side)
             if inst is None or inst.character is None:
                 col["name_lbl"].setText("(no character)")
-                for lbl_key, prefix in (("dmg_dealt", "Damage dealt"),
-                                         ("dmg_recv", "Damage received"),
-                                         ("stam_cost", "Stamina cost"),
-                                         ("mana_cost", "Mana cost")):
-                    col[lbl_key].setText(f"{prefix}:   -")
+                col["action_chip"].setText("")
+                col["outcome"].setText(
+                    "<span style='color:#888;'>(no character on this side)</span>")
                 continue
             col["name_lbl"].setText(inst.character.name)
             cur_action = (enc.left_action if side == "left" else enc.right_action)
-            # Sync radio state to enc, but don't fire handlers while doing so.
-            for k, rb in col["action_radios"].items():
-                if rb.isChecked() != (k == cur_action):
-                    rb.blockSignals(True); rb.setChecked(k == cur_action); rb.blockSignals(False)
+            # Sync segmented action buttons.
+            for k, btn in col["action_radios"].items():
+                if btn.isChecked() != (k == cur_action):
+                    btn.blockSignals(True); btn.setChecked(k == cur_action); btn.blockSignals(False)
             sel = enc.left_atk_selection if side == "left" else enc.right_atk_selection
             for k, rb in col["atk_radios"].items():
                 if rb.isChecked() != (k == sel):
                     rb.blockSignals(True); rb.setChecked(k == sel); rb.blockSignals(False)
-            col["atk_box"].setVisible(cur_action == "attack")
-            # v3.4.4: show "Use shield" only when blocking.
-            col["shield_box"].setVisible(cur_action == "block")
-            # v3.4.5: show form picker only when shifting.
-            col["shift_box"].setVisible(cur_action == "shift")
+            # Show the correct pane of the single sub-control stack.
+            #   atk: 0  block: 1  cast/dodge: 2 (empty)  shift: 3
+            pane_idx = {"attack": 0, "block": 1, "cast": 2,
+                         "dodge": 2, "shift": 3}.get(cur_action, 2)
+            col["sub_stack"].setCurrentIndex(pane_idx)
+            # Header action chip.
+            icon, name, accent = self.ACTION_META.get(cur_action, ("", "", "#888"))
+            col["action_chip"].setText(f"{icon} {name}")
+            col["action_chip"].setStyleSheet(
+                f"padding: 2px 8px; border-radius: 3px; "
+                f"background-color: {accent}; color: #1a1a1a; "
+                f"font-weight: bold;")
             # Populate form combo with this character's forms.
             form_combo = col["form_combo"]
             pending = (enc.left_pending_form_id if side == "left"
@@ -1123,21 +1253,18 @@ class ConflictPanel(QGroupBox):
                         form_combo.setCurrentIndex(i)
                         break
             form_combo.blockSignals(False)
-            # Sync the use-shield checkbox to encounter state.
+            # Sync the use-shield checkbox.
             use_shield = (enc.left_use_shield if side == "left"
                           else enc.right_use_shield)
             if col["use_shield_chk"].isChecked() != use_shield:
                 col["use_shield_chk"].blockSignals(True)
                 col["use_shield_chk"].setChecked(use_shield)
                 col["use_shield_chk"].blockSignals(False)
-            # Disable the checkbox if the character has no shield equipped.
             has_shield = inst.character.get_shield(self._state.state.weapons) is not None
             col["use_shield_chk"].setEnabled(has_shield)
-            if not has_shield:
-                col["use_shield_chk"].setToolTip(
-                    "No shield equipped — block falls back to plain HP loss.")
-            else:
-                col["use_shield_chk"].setToolTip("")
+            col["use_shield_chk"].setToolTip(
+                "" if has_shield else
+                "No shield equipped — block falls back to plain HP loss.")
 
             stam_cost = mana_cost = 0
             atk_val = 0.0
@@ -1159,31 +1286,44 @@ class ConflictPanel(QGroupBox):
                 if shield and use_shield:
                     stam_cost = shield.block_cost
             elif cur_action == "shift":
-                # v3.4.5: shapeshifting costs 100 mana flat.
                 from state import StateManager as _SM
                 mana_cost = _SM.SHAPESHIFT_MANA_COST
-            col["dmg_dealt"].setText(f"Damage dealt:   {atk_val:.1f}")
-            col["stam_cost"].setText(f"Stamina cost:   {stam_cost}")
-            col["mana_cost"].setText(f"Mana cost:   {mana_cost}")
+            side_data[side] = {
+                "atk_val": atk_val, "stam_cost": stam_cost,
+                "mana_cost": mana_cost, "inst": inst, "action": cur_action,
+                "use_shield": use_shield,
+            }
 
-        # v3.4.4: "Damage received" now shows the FINAL HP loss the defender
-        # would take after considering their action (block with/without
-        # shield, successful dodge → 0, etc.) and their current DEF / form.
-        l_inst = self._state.active_instance("left")
-        r_inst = self._state.active_instance("right")
-        if l_inst and r_inst and l_inst.character and r_inst.character:
-            l_raw = self._outgoing_for_panel(l_inst.character, enc.left_action,
-                                              enc.left_atk_selection)
-            r_raw = self._outgoing_for_panel(r_inst.character, enc.right_action,
-                                              enc.right_atk_selection)
+        # v3.4.4: damage received = FINAL HP loss (accounts for dodge / block /
+        # form / DEF). v3.4.6: rendered as one inline rich-text row per side.
+        l = side_data.get("left"); r = side_data.get("right")
+        if l and r:
+            l_raw = l["atk_val"]; r_raw = r["atk_val"]
             left_final = self._final_damage_received(
-                l_inst.character, enc.left_action, enc.left_use_shield,
-                r_inst.character, r_raw)
+                l["inst"].character, l["action"], l["use_shield"],
+                r["inst"].character, r_raw)
             right_final = self._final_damage_received(
-                r_inst.character, enc.right_action, enc.right_use_shield,
-                l_inst.character, l_raw)
-            self._left_col["dmg_recv"].setText(f"Damage received:   {left_final:.1f}")
-            self._right_col["dmg_recv"].setText(f"Damage received:   {right_final:.1f}")
+                r["inst"].character, r["action"], r["use_shield"],
+                l["inst"].character, l_raw)
+            self._left_col["outcome"].setText(
+                self._format_outcome(l["atk_val"], left_final,
+                                       l["stam_cost"], l["mana_cost"]))
+            self._right_col["outcome"].setText(
+                self._format_outcome(r["atk_val"], right_final,
+                                       r["stam_cost"], r["mana_cost"]))
+
+    @staticmethod
+    def _format_outcome(dealt: float, recv: float, stam: int, mana: int) -> str:
+        """One-line outcome string for a side, color-coded inline."""
+        return (
+            f"<span style='color:#7fd194;'><b>Dealt</b> {dealt:.1f}</span>"
+            f" &nbsp;·&nbsp; "
+            f"<span style='color:#f76b66;'><b>Recv</b> {recv:.1f}</span>"
+            f" &nbsp;·&nbsp; "
+            f"<span style='color:#e07a4a;'>-{stam} SP</span>"
+            f" &nbsp;·&nbsp; "
+            f"<span style='color:#4a9ad7;'>-{mana} MP</span>"
+        )
 
     def _final_damage_received(self, defender, defender_action: str,
                                 use_shield: bool, attacker,
@@ -1256,24 +1396,35 @@ class EncounterTab(QWidget):
         enc_tabs_row.addWidget(new_enc_btn)
         outer.addLayout(enc_tabs_row)
 
-        toolbar = QHBoxLayout(); toolbar.setSpacing(10)
-        self._start_btn = QPushButton("Start Encounter"); self._start_btn.setProperty("role", "primary")
-        self._start_btn.clicked.connect(self._on_start_encounter)
-        toolbar.addWidget(self._start_btn)
-        self._name_label_widget = QLabel("Encounter:")
-        self._name_label_widget.setProperty("role", "header")
-        toolbar.addWidget(self._name_label_widget)
-        self._name_edit = QLineEdit()
-        self._name_edit.setPlaceholderText("Encounter name")
-        self._name_edit.editingFinished.connect(self._on_name_committed)
-        toolbar.addWidget(self._name_edit, 1)
-        self._begin_combat_btn = QPushButton("Begin Combat"); self._begin_combat_btn.setProperty("role", "primary")
-        self._begin_combat_btn.clicked.connect(self._on_begin_combat)
-        toolbar.addWidget(self._begin_combat_btn)
-        self._end_btn = QPushButton("End Encounter"); self._end_btn.setProperty("role", "danger")
-        self._end_btn.clicked.connect(self._on_end)
-        toolbar.addWidget(self._end_btn)
-        outer.addLayout(toolbar)
+        # v3.4.6: the old top toolbar (Start / name field / Begin Combat /
+        # End Encounter) is gone. Per-tab actions live on the encounter tab
+        # strip: close button = End Encounter (with confirmation),
+        # double-click tab = rename, right-click tab = context menu with
+        # Begin Combat / Rename / End Encounter. "Start Encounter" is the
+        # job of the "+ New encounter" button next to the tab strip; when
+        # there are zero encounters, an empty-state placeholder appears in
+        # the main row.
+        self._enc_tab_bar.setTabsClosable(True)
+        self._enc_tab_bar.tabCloseRequested.connect(self._on_close_encounter_tab)
+        self._enc_tab_bar.tabBarDoubleClicked.connect(self._on_rename_encounter_tab)
+        self._enc_tab_bar.tabBar().setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self._enc_tab_bar.tabBar().customContextMenuRequested.connect(
+            self._on_tab_context_menu)
+        # The empty-state placeholder lives in the main row when there
+        # are no encounters yet.
+        self._empty_placeholder = QFrame()
+        ep_l = QVBoxLayout(self._empty_placeholder)
+        ep_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ep_lbl = QLabel("No encounter yet.")
+        ep_lbl.setStyleSheet("color: #888; font-size: 14pt;")
+        ep_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ep_l.addWidget(ep_lbl)
+        ep_start = QPushButton("+ Start Encounter")
+        ep_start.setProperty("role", "primary")
+        ep_start.setStyleSheet("padding: 12px 24px; font-size: 13pt;")
+        ep_start.clicked.connect(self._on_new_encounter)
+        ep_l.addWidget(ep_start, 0, Qt.AlignmentFlag.AlignCenter)
 
         main_row = QHBoxLayout(); main_row.setSpacing(12)
         self._left_container = QFrame(); self._left_container.setFrameShape(QFrame.Shape.StyledPanel)
@@ -1314,10 +1465,20 @@ class EncounterTab(QWidget):
         main_row.addWidget(self._right_container, 1)
         outer.addLayout(main_row, 1)
 
-        bin_header = QLabel("Encounter Bin (removed characters — click to restore):")
-        bin_header.setProperty("role", "dim")
-        outer.addWidget(bin_header)
-        self._bin_widget = QWidget(); self._bin_widget.setFixedHeight(48)
+        # v3.4.6: Bin is a collapsed drawer. The header shows the current
+        # count; clicking expands the row of restorable chips.
+        self._bin_expanded = False
+        self._bin_header = QPushButton("▸  Encounter Bin (0)")
+        self._bin_header.setFlat(True)
+        self._bin_header.setStyleSheet(
+            "QPushButton { text-align: left; padding: 4px 6px; color: #888; "
+            "background: transparent; border: none; }"
+            "QPushButton:hover { color: #ccc; }")
+        self._bin_header.clicked.connect(self._toggle_bin)
+        outer.addWidget(self._bin_header)
+        self._bin_widget = QWidget()
+        self._bin_widget.setFixedHeight(48)
+        self._bin_widget.setVisible(False)
         self._bin_layout = QHBoxLayout(self._bin_widget)
         self._bin_layout.setContentsMargins(4, 4, 4, 4); self._bin_layout.setSpacing(6)
         self._bin_empty = QLabel("(bin is empty)"); self._bin_empty.setProperty("role", "dim")
@@ -1367,10 +1528,61 @@ class EncounterTab(QWidget):
         if self._state.state.active_encounter is None:
             self._state.start_encounter()
 
-    def _on_name_committed(self) -> None:
-        if self._state.state.active_encounter is None:
+    # v3.4.6: Tab close button = End Encounter (with confirmation).
+    def _on_close_encounter_tab(self, idx: int) -> None:
+        eid = self._enc_tab_bar.tabBar().tabData(idx)
+        if not eid:
             return
-        self._state.rename_encounter(self._name_edit.text().strip() or "Untitled Encounter")
+        enc = self._state.get_encounter(eid)
+        if enc is None:
+            return
+        # Select this encounter first, then run the standard End flow.
+        self._state.select_encounter(eid)
+        self._on_end()
+
+    def _on_rename_encounter_tab(self, idx: int) -> None:
+        if idx < 0:
+            return
+        eid = self._enc_tab_bar.tabBar().tabData(idx)
+        if not eid:
+            return
+        enc = self._state.get_encounter(eid)
+        if enc is None:
+            return
+        new_name, ok = QInputDialog.getText(
+            self, "Rename encounter", "Encounter name:", text=enc.name)
+        if ok and new_name.strip():
+            self._state.select_encounter(eid)
+            self._state.rename_encounter(new_name.strip())
+
+    def _on_tab_context_menu(self, pos) -> None:
+        from PyQt6.QtWidgets import QMenu
+        idx = self._enc_tab_bar.tabBar().tabAt(pos)
+        if idx < 0:
+            return
+        eid = self._enc_tab_bar.tabBar().tabData(idx)
+        enc = self._state.get_encounter(eid) if eid else None
+        if enc is None:
+            return
+        menu = QMenu(self)
+        a_rename = menu.addAction("Rename…")
+        if not enc.is_started:
+            a_begin = menu.addAction("Begin Combat")
+        else:
+            a_begin = None
+        menu.addSeparator()
+        a_end = menu.addAction("End Encounter")
+        chosen = menu.exec(self._enc_tab_bar.tabBar().mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen is a_rename:
+            self._on_rename_encounter_tab(idx)
+        elif chosen is a_begin:
+            self._state.select_encounter(eid)
+            self._on_begin_combat()
+        elif chosen is a_end:
+            self._state.select_encounter(eid)
+            self._on_end()
 
     def _on_begin_combat(self) -> None:
         ok, msg = self._state.start_combat()
@@ -1417,14 +1629,75 @@ class EncounterTab(QWidget):
                 except Exception: pass
             w.setParent(None); w.deleteLater()
 
+    def _toggle_bin(self) -> None:
+        self._bin_expanded = not self._bin_expanded
+        self._bin_widget.setVisible(self._bin_expanded)
+        self._update_bin_header()
+
+    def _update_bin_header(self) -> None:
+        enc = self._state.state.active_encounter
+        n = sum(1 for i in (enc.instances if enc else []) if i.is_in_bin)
+        arrow = "▾" if self._bin_expanded else "▸"
+        self._bin_header.setText(f"{arrow}  Encounter Bin ({n})")
+        # Highlight when the bin has anything in it.
+        if n > 0 and not self._bin_expanded:
+            self._bin_header.setStyleSheet(
+                "QPushButton { text-align: left; padding: 4px 6px; "
+                "color: #f0aa6a; background: transparent; border: none; "
+                "font-weight: bold; }"
+                "QPushButton:hover { color: #ffcc88; }")
+        else:
+            self._bin_header.setStyleSheet(
+                "QPushButton { text-align: left; padding: 4px 6px; "
+                "color: #888; background: transparent; border: none; }"
+                "QPushButton:hover { color: #ccc; }")
+
     def _on_roster_search(self, text: str) -> None:
         self._roster_search = text.strip().lower()
         self.refresh()
+
+    def _build_empty_state(self) -> QWidget:
+        """v3.4.6: placeholder shown in the middle column when there are no
+        encounters yet. The user creates one from here OR from the
+        '+ New encounter' button in the tab strip header."""
+        wrap = QFrame()
+        wrap.setStyleSheet(
+            "QFrame { background-color: #1c1c1c; border-radius: 6px; }")
+        l = QVBoxLayout(wrap)
+        l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        l.setSpacing(16)
+        lbl = QLabel("No active encounter.")
+        lbl.setStyleSheet("color: #888888; font-size: 14pt;")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        l.addWidget(lbl)
+        start = QPushButton("+ Start Encounter")
+        start.setProperty("role", "primary")
+        start.setStyleSheet(
+            "QPushButton { padding: 14px 28px; font-size: 13pt; "
+            "border-radius: 6px; }")
+        start.clicked.connect(self._on_new_encounter)
+        l.addWidget(start, 0, Qt.AlignmentFlag.AlignCenter)
+        return wrap
 
     def _build_roster_widget(self, enc) -> QWidget:
         wrap = QFrame()
         wrap.setStyleSheet("QFrame { background-color: #1c1c1c; border-radius: 6px; }")
         v = QVBoxLayout(wrap); v.setContentsMargins(8, 8, 8, 8); v.setSpacing(8)
+        # v3.4.6: a prominent "Begin Combat" button sits at the top of the
+        # roster during prep, so the workflow flows top-to-bottom without
+        # a separate toolbar row. Enabled when at least one participant is
+        # placed on either side.
+        begin = QPushButton("▶ Begin Combat")
+        begin.setProperty("role", "primary")
+        begin.setStyleSheet(
+            "QPushButton { padding: 10px; font-size: 13pt; "
+            "border-radius: 6px; background-color: #2d5a3d; color: #d8f0d8; }"
+            "QPushButton:hover { background-color: #3a6e4d; }"
+            "QPushButton:disabled { background-color: #2a2a2a; color: #555; }")
+        begin.setEnabled(bool(enc.left_participant_ids) or
+                          bool(enc.right_participant_ids))
+        begin.clicked.connect(self._on_begin_combat)
+        v.addWidget(begin)
         title = QLabel("Encounter Roster"); title.setProperty("role", "header")
         v.addWidget(title)
         search_row = QHBoxLayout(); search_row.setSpacing(6)
@@ -1539,33 +1812,26 @@ class EncounterTab(QWidget):
         return wrap
 
     def refresh(self) -> None:
-        # v3.4: rebuild the encounter tab strip first.
+        # v3.4.6: rebuild the encounter tab strip first.
         self._rebuild_enc_tab_bar()
         enc = self._state.state.active_encounter
-        self._start_btn.setVisible(enc is None)
-        self._begin_combat_btn.setVisible(enc is not None and not enc.is_started)
-        self._begin_combat_btn.setEnabled(
-            enc is not None and not enc.is_started
-            and (bool(enc.left_participant_ids) or bool(enc.right_participant_ids)))
-        self._end_btn.setEnabled(enc is not None)
-        self._name_edit.setEnabled(enc is not None)
-        self._name_label_widget.setEnabled(enc is not None)
-        if enc is not None:
-            if self._name_edit.text() != enc.name:
-                self._name_edit.blockSignals(True); self._name_edit.setText(enc.name); self._name_edit.blockSignals(False)
-        else:
-            self._name_edit.blockSignals(True); self._name_edit.setText(""); self._name_edit.blockSignals(False)
         self._clear_layout(self._left_inner, keep_widgets=(self._left_empty,))
         self._clear_layout(self._right_inner, keep_widgets=(self._right_empty,))
         self._clear_layout(self._middle_layout, keep_widgets=(self._conflict_btn,))
         self._clear_layout(self._bin_layout, keep_widgets=(self._bin_empty,))
         if enc is None:
-            self._left_empty.setText("\n(no active encounter)\n")
-            self._right_empty.setText("\n(no active encounter)\n")
-            self._left_empty.setVisible(True); self._right_empty.setVisible(True)
+            self._left_empty.setVisible(False)
+            self._right_empty.setVisible(False)
             self._bin_empty.setVisible(True)
             self._conflict_btn.setEnabled(False)
             self._conflict_btn.setText("Enter Conflict"); self._conflict_btn.setVisible(False)
+            # v3.4.6: empty-state placeholder fills the middle column with a
+            # call-to-action ("+ Start Encounter").
+            # Reparent the placeholder fresh each time so it doesn't get
+            # deleted by _clear_layout.
+            placeholder = self._build_empty_state()
+            self._middle_layout.addWidget(placeholder)
+            self._update_bin_header()
             return
         binned = [i for i in enc.instances if i.is_in_bin]
         self._bin_empty.setVisible(not binned)
@@ -1574,6 +1840,9 @@ class EncounterTab(QWidget):
             btn.setStyleSheet("QPushButton { background-color: #471323; color: white; }")
             btn.clicked.connect(lambda _c, iid=inst.instance_id: self._state.restore_instance_from_bin(iid))
             self._bin_layout.insertWidget(self._bin_layout.count() - 1, btn)
+        # v3.4.6: update the collapsed-bin header text + color so the user
+        # notices when something is in there even with the drawer collapsed.
+        self._update_bin_header()
         if not enc.is_started:
             self._conflict_btn.setVisible(False)
             roster = self._build_roster_widget(enc)
