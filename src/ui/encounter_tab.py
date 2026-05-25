@@ -774,13 +774,20 @@ class CompactCharacterCard(QFrame):
             self._dice_in.blockSignals(True)
             self._dice_in.setValue(c.dice)
             self._dice_in.blockSignals(False)
-        # Vital bars — only push when the spin doesn't already match.
-        if self._hp_bar.current_input.value() != c.health_current:
-            self._hp_bar.set_values(c.health_current, c.health_max, animate=True)
-        if self._stam_bar.current_input.value() != c.stamina_current:
-            self._stam_bar.set_values(c.stamina_current, c.stamina_max, animate=True)
-        if self._mana_bar.current_input.value() != c.mana_current:
-            self._mana_bar.set_values(c.mana_current, c.mana_max, animate=True)
+        # v3.4.4: vital bar maxes apply the active form's vital multipliers
+        # so changing form actually moves the bars.
+        hp_max = c.vital_max_with_form("health")
+        st_max = c.vital_max_with_form("stamina")
+        mp_max = c.vital_max_with_form("mana")
+        if (self._hp_bar.current_input.value() != c.health_current
+                or self._hp_bar.max_input.value() != hp_max):
+            self._hp_bar.set_values(c.health_current, hp_max, animate=True)
+        if (self._stam_bar.current_input.value() != c.stamina_current
+                or self._stam_bar.max_input.value() != st_max):
+            self._stam_bar.set_values(c.stamina_current, st_max, animate=True)
+        if (self._mana_bar.current_input.value() != c.mana_current
+                or self._mana_bar.max_input.value() != mp_max):
+            self._mana_bar.set_values(c.mana_current, mp_max, animate=True)
         if self._fall_in.value() != c.fall_height:
             self._fall_in.blockSignals(True)
             self._fall_in.setValue(c.fall_height)
@@ -947,6 +954,16 @@ class ConflictPanel(QGroupBox):
         atk_radios["martial"].blockSignals(False)
         layout.addWidget(atk_box)
 
+        # v3.4.4: "Use shield" sub-option (visible only when action == "block").
+        shield_box = QFrame()
+        shield_l = QHBoxLayout(shield_box); shield_l.setContentsMargins(16, 0, 0, 0)
+        use_shield_chk = QCheckBox("Use shield (apply damage_negation + block cost)")
+        use_shield_chk.setChecked(True)
+        use_shield_chk.toggled.connect(self._on_use_shield_factory(side))
+        shield_l.addWidget(use_shield_chk)
+        shield_l.addStretch(1)
+        layout.addWidget(shield_box)
+
         # Outcome labels (always shown, smaller text so they fit a 1/3 column)
         dmg_dealt = QLabel("Damage dealt:   -")
         dmg_dealt.setStyleSheet("color: #44af69; font-weight: bold;")
@@ -964,9 +981,22 @@ class ConflictPanel(QGroupBox):
             "side": side, "box": box, "name_lbl": name_lbl,
             "action_radios": action_radios, "atk_radios": atk_radios,
             "atk_box": atk_box,
+            "shield_box": shield_box, "use_shield_chk": use_shield_chk,
             "dmg_dealt": dmg_dealt, "dmg_recv": dmg_recv,
             "stam_cost": stam_cost, "mana_cost": mana_cost,
         }
+
+    def _on_use_shield_factory(self, side: str):
+        def handler(checked: bool) -> None:
+            enc = self._state.state.active_encounter
+            if enc is None:
+                return
+            if side == "left":
+                enc.left_use_shield = checked
+            else:
+                enc.right_use_shield = checked
+            self.refresh()
+        return handler
 
     def _on_action_toggled_factory(self, side: str, key: str):
         def handler(checked: bool) -> None:
@@ -1031,6 +1061,23 @@ class ConflictPanel(QGroupBox):
                 if rb.isChecked() != (k == sel):
                     rb.blockSignals(True); rb.setChecked(k == sel); rb.blockSignals(False)
             col["atk_box"].setVisible(cur_action == "attack")
+            # v3.4.4: show "Use shield" only when blocking.
+            col["shield_box"].setVisible(cur_action == "block")
+            # Sync the use-shield checkbox to encounter state.
+            use_shield = (enc.left_use_shield if side == "left"
+                          else enc.right_use_shield)
+            if col["use_shield_chk"].isChecked() != use_shield:
+                col["use_shield_chk"].blockSignals(True)
+                col["use_shield_chk"].setChecked(use_shield)
+                col["use_shield_chk"].blockSignals(False)
+            # Disable the checkbox if the character has no shield equipped.
+            has_shield = inst.character.get_shield(self._state.state.weapons) is not None
+            col["use_shield_chk"].setEnabled(has_shield)
+            if not has_shield:
+                col["use_shield_chk"].setToolTip(
+                    "No shield equipped — block falls back to plain HP loss.")
+            else:
+                col["use_shield_chk"].setToolTip("")
 
             stam_cost = mana_cost = 0
             atk_val = 0.0
@@ -1049,21 +1096,60 @@ class ConflictPanel(QGroupBox):
                     inst.character, "arcana")
             elif cur_action == "block":
                 shield = inst.character.get_shield(self._state.state.weapons)
-                if shield:
+                if shield and use_shield:
                     stam_cost = shield.block_cost
             col["dmg_dealt"].setText(f"Damage dealt:   {atk_val:.1f}")
             col["stam_cost"].setText(f"Stamina cost:   {stam_cost}")
             col["mana_cost"].setText(f"Mana cost:   {mana_cost}")
 
+        # v3.4.4: "Damage received" now shows the FINAL HP loss the defender
+        # would take after considering their action (block with/without
+        # shield, successful dodge → 0, etc.) and their current DEF / form.
         l_inst = self._state.active_instance("left")
         r_inst = self._state.active_instance("right")
         if l_inst and r_inst and l_inst.character and r_inst.character:
-            l_atk = self._outgoing_for_panel(l_inst.character, enc.left_action,
+            l_raw = self._outgoing_for_panel(l_inst.character, enc.left_action,
                                               enc.left_atk_selection)
-            r_atk = self._outgoing_for_panel(r_inst.character, enc.right_action,
+            r_raw = self._outgoing_for_panel(r_inst.character, enc.right_action,
                                               enc.right_atk_selection)
-            self._left_col["dmg_recv"].setText(f"Damage received:   {r_atk:.1f}")
-            self._right_col["dmg_recv"].setText(f"Damage received:   {l_atk:.1f}")
+            left_final = self._final_damage_received(
+                l_inst.character, enc.left_action, enc.left_use_shield,
+                r_inst.character, r_raw)
+            right_final = self._final_damage_received(
+                r_inst.character, enc.right_action, enc.right_use_shield,
+                l_inst.character, l_raw)
+            self._left_col["dmg_recv"].setText(f"Damage received:   {left_final:.1f}")
+            self._right_col["dmg_recv"].setText(f"Damage received:   {right_final:.1f}")
+
+    def _final_damage_received(self, defender, defender_action: str,
+                                use_shield: bool, attacker,
+                                attacker_outgoing: float) -> float:
+        """Estimate the HP loss the defender would take this round."""
+        if attacker_outgoing <= 0:
+            return 0.0
+        # Successful dodge → 0 damage
+        if defender_action == "dodge":
+            cb_d = me.derive_combat_view(
+                defender, self._state.state.weapons, self._state.state.armors,
+                self._state.state.items,
+                spell=self._state._equipped_spell(defender))
+            if cb_d["dodge"] > attacker.dice:
+                return 0.0
+        # Compute HP loss with dmg_received temporarily set on the defender.
+        saved = defender.dmg_received
+        defender.dmg_received = int(round(attacker_outgoing))
+        try:
+            cb_d = me.derive_combat_view(
+                defender, self._state.state.weapons, self._state.state.armors,
+                self._state.state.items,
+                spell=self._state._equipped_spell(defender))
+        finally:
+            defender.dmg_received = saved
+        if defender_action == "block":
+            shield = defender.get_shield(self._state.state.weapons)
+            if shield and use_shield:
+                return cb_d["shielded_hp_loss"]
+        return cb_d["hp_loss"]
 
     def _outgoing_for_panel(self, char: Character, action: str, sel: str) -> float:
         if action == "attack":

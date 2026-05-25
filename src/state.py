@@ -1356,13 +1356,20 @@ class StateManager(QObject):
                 spell=self._equipped_spell(defender))
             if action == "block":
                 shield = defender.get_shield(self.state.weapons)
-                loss = cb_def["shielded_hp_loss"] if shield else cb_def["hp_loss"]
+                # v3.4.4: honor the explicit "use shield" flag. Without
+                # a shield equipped, or with the flag off, block falls
+                # back to plain hp_loss.
+                use_shield = (enc.left_use_shield if side == "left"
+                              else enc.right_use_shield)
+                if shield and use_shield:
+                    loss = cb_def["shielded_hp_loss"]
+                else:
+                    loss = cb_def["hp_loss"]
                 self.apply_hp_loss(defender, loss)
-                if shield and shield.max_defense < defender.dmg_received:
+                if shield and use_shield and shield.max_defense < defender.dmg_received:
                     defender.shield_id = None
                     msgs.append(f"{defender.name}'s shield broke")
-                # Block stamina cost
-                if shield:
+                if shield and use_shield:
                     defender.stamina_current = max(
                         0, defender.stamina_current - shield.block_cost)
             else:

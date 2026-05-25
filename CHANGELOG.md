@@ -1,5 +1,32 @@
 # DnD Manager Changelog
 
+## v3.4.4 — "Damage received" reflects what you'll actually take
+
+- **"Damage received" in the conflict panel now shows the FINAL HP loss**
+  the defender would take this round, not the attacker's raw outgoing
+  damage. That means:
+  - **Successful dodge** (defender's dodge value > attacker's dice roll)
+    shows `0.0` damage received.
+  - **Block with shield** shows `shielded_hp_loss` (incoming reduced by
+    the shield's damage_negation, capped by max_defense).
+  - **Block without shield** shows plain `hp_loss` (incoming minus DEF).
+  - **Defender form change** is now visible — a form with `armor_mult`
+    > 1 changes the defender's DEF, which changes the received-damage
+    estimate the moment you switch forms.
+- **New "Use shield" checkbox** appears when the Block action is
+  selected. The checkbox is disabled (with a tooltip) if no shield is
+  equipped. The conflict-resolution math now honors the flag instead of
+  silently using the shield whenever one is equipped.
+- **Vital bar max values** in the compact character card now apply the
+  active form's `health_mult` / `stamina_mult` / `mana_mult`, so
+  switching forms visibly moves the bars.
+
+No schema change beyond two new boolean fields on Encounter
+(`left_use_shield`, `right_use_shield`, default `True`). Old saves
+auto-migrate via the dataclass default.
+
+---
+
 ## v3.4.3 — Conflict-panel signal-leak fix
 
 Root cause of "QLabel has been deleted" crashes during conflict edits:

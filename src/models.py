@@ -462,6 +462,13 @@ class Encounter:
     items_used_left: list[str] = field(default_factory=list)
     items_used_right: list[str] = field(default_factory=list)
 
+    # v3.4.4: when a side picks 'block', they can also pick whether to use
+    # their shield. Without a shield, blocking is just standing your
+    # ground — takes plain hp_loss. With a shield equipped AND this flag
+    # set, uses shielded_hp_loss.
+    left_use_shield: bool = True
+    right_use_shield: bool = True
+
     # v3.3/v3.4: Each side picks ONE action per conflict. One of:
     #   'attack', 'block', 'cast', 'dodge'
     # (v3.4: 'use_item' was removed — items can only be used between
