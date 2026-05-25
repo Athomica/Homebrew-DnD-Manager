@@ -172,22 +172,48 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if reply == QMessageBox.StandardButton.Yes:
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
             from models import AppState
             from state import BACKUP_DIR, serialize_app_state
-            import json, time
+            import json, time, traceback
+
+            # Best-effort backup of the current state
             try:
                 (BACKUP_DIR / f"backup_{int(time.time())}.json").write_text(
                     json.dumps(serialize_app_state(self._state.state, save_name="pre_new"),
                                indent=2))
-            except OSError:
+            except Exception:
+                # Backup is non-critical
                 pass
+
+            # Tear down the current GCL detail sheets before swapping state out
+            # from under them - this prevents orphan CharacterSheet widgets
+            # from receiving signals against state they no longer belong to.
+            try:
+                self._gcl_tab.tear_down_detail_sheets()
+            except Exception:
+                pass
+
+            # Swap to a fresh state and reapply (empty) modifiers
             self._state.state = AppState()
             self._state._apply_modifiers_to_engine()
+            self._state._current_save_path = None
+
+            # Notify subscribers; each tab decides how to redraw
             self._state.lists_changed.emit()
             self._state.encounter_changed.emit()
             self._refresh_total_turns({})
+            self._refresh_campaign_label()
             self.statusBar().showMessage("New campaign started", 3000)
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            QMessageBox.critical(
+                self, "New Campaign Failed",
+                f"Could not start a new campaign:\n\n{exc}\n\n"
+                f"Traceback:\n{tb[-1500:]}")
 
     def _on_open(self) -> None:
         SAVES_DIR.mkdir(parents=True, exist_ok=True)

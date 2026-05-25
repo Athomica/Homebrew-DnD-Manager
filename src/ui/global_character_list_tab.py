@@ -202,14 +202,27 @@ class CharacterListSubTab(QWidget):
                     self._list.setCurrentRow(self._list.count() - 1)
 
     def _set_sheet(self, char: Character | None) -> None:
+        # Tear down the old sheet first so it stops receiving signals.
+        old = self._sheet_scroll.takeWidget()
+        if old is not None and old is not self._empty_placeholder:
+            if hasattr(old, "cleanup"):
+                try:
+                    old.cleanup()
+                except Exception:
+                    pass
+            old.setParent(None)
+            old.deleteLater()
+        self._sheet = None
         if char is None:
-            self._sheet_scroll.takeWidget()
             self._sheet_scroll.setWidget(self._empty_placeholder)
-            self._sheet = None
             return
         self._sheet = CharacterSheet(self._state, char)
-        self._sheet_scroll.takeWidget()
         self._sheet_scroll.setWidget(self._sheet)
+
+    def tear_down_detail_sheet(self) -> None:
+        """Public hook for the main window to call before swapping state."""
+        self._current_id = None
+        self._set_sheet(None)
 
     # -- toolbar handlers ---------------------------------------------
     def _on_add(self) -> None:
@@ -276,10 +289,22 @@ class GlobalCharacterListTab(QWidget):
         outer.addLayout(topbar)
 
         tabs = QTabWidget()
-        tabs.addTab(CharacterListSubTab(state, "party"), "Party")
-        tabs.addTab(CharacterListSubTab(state, "mob"), "Mobs")
-        tabs.addTab(CharacterListSubTab(state, "npc"), "NPCs")
+        self._party_sub = CharacterListSubTab(state, "party")
+        self._mob_sub = CharacterListSubTab(state, "mob")
+        self._npc_sub = CharacterListSubTab(state, "npc")
+        tabs.addTab(self._party_sub, "Party")
+        tabs.addTab(self._mob_sub, "Mobs")
+        tabs.addTab(self._npc_sub, "NPCs")
         outer.addWidget(tabs)
+
+    def tear_down_detail_sheets(self) -> None:
+        """Called by the main window before a state swap (e.g. File > New) so
+        no stale CharacterSheet receives a signal about state it doesn't own."""
+        for sub in (self._party_sub, self._mob_sub, self._npc_sub):
+            try:
+                sub.tear_down_detail_sheet()
+            except Exception:
+                pass
 
         self._state = state
         self._state.view_mode_changed.connect(self._refresh_view_btn)

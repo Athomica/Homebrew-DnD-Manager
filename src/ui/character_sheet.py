@@ -147,6 +147,36 @@ class CharacterSheet(QWidget):
         self._apply_view_mode()
         self._refresh_lock_state()
 
+    def cleanup(self) -> None:
+        """Disconnect from all state signals so this sheet stops reacting.
+        Call before deleteLater() to avoid late-firing signals reaching a
+        widget that's been logically removed from the UI."""
+        for sig in (self._state.lists_changed,
+                    self._state.character_changed,
+                    self._state.view_mode_changed,
+                    self._state.encounter_changed,
+                    self._state.modifiers_changed):
+            try:
+                sig.disconnect(self._refresh_derived)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                sig.disconnect(self._refresh_lookup_dropdowns)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                sig.disconnect(self._on_external_char_changed)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                sig.disconnect(self._apply_view_mode)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                sig.disconnect(self._refresh_lock_state)
+            except (TypeError, RuntimeError):
+                pass
+
     # ------------------------------------------------------------------
     # Signal handlers
     # ------------------------------------------------------------------

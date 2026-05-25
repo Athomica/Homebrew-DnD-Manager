@@ -96,6 +96,18 @@ class EncounterCard(QFrame):
         self._state.encounter_changed.connect(self._refresh)
         self._refresh()
 
+    def cleanup(self) -> None:
+        """Disconnect signals and clean up the inner sheet before deletion."""
+        try:
+            self._state.encounter_changed.disconnect(self._refresh)
+        except (TypeError, RuntimeError):
+            pass
+        if hasattr(self._sheet, "cleanup"):
+            try:
+                self._sheet.cleanup()
+            except Exception:
+                pass
+
     def _on_remove(self) -> None:
         reply = QMessageBox.question(
             self, "Remove from encounter?",
@@ -575,6 +587,11 @@ class EncounterTab(QWidget):
                 i += 1
                 continue
             layout.takeAt(i)
+            if hasattr(w, "cleanup"):
+                try:
+                    w.cleanup()
+                except Exception:
+                    pass
             w.setParent(None)
             w.deleteLater()
 
