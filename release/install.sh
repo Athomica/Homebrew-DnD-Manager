@@ -1,26 +1,35 @@
 #!/usr/bin/env bash
-# DnD Manager v3.1 — installer script
+# DnD Manager — installer script
 #
-# This script downloads the two halves of the application binary from your
-# GitHub repository, joins them, makes the result executable, registers a
-# KDE menu entry, and launches the app.
+# Downloads the two halves of the application binary from the repo, joins them,
+# verifies the SHA-256 matches what was committed, makes it executable,
+# registers a KDE menu entry, and launches it.
 #
 # Run with:
 #   bash install.sh
+#
+# Override the branch (for testing a feature branch) with:
+#   BRANCH=some/other-branch bash install.sh
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-REPO="athomica/homebrew-dnd-manager"
-BRANCH="claude/optimistic-pascal-u4dyW"
+REPO="Athomica/Homebrew-DnD-Manager"
+BRANCH="${BRANCH:-claude/peaceful-heisenberg-ABLtK}"
 BASE="https://raw.githubusercontent.com/$REPO/$BRANCH/release"
+
+# Expected SHA-256 of the assembled binary. Updated every time the binary is
+# rebuilt; if the parts on disk don't match, the installer aborts loudly
+# instead of silently installing a stale build.
+EXPECTED_SHA256="71250495d6696676bd84b583bfd5841f82da395e71605f83b5ccb5fee92c223f"
 
 DEST="$HOME/DnDManager"
 TMP1="$(mktemp -t dndmgr.part1.XXXXXX)"
 TMP2="$(mktemp -t dndmgr.part2.XXXXXX)"
-trap 'rm -f "$TMP1" "$TMP2"' EXIT
+TMP_OUT="$(mktemp -t dndmgr.bin.XXXXXX)"
+trap 'rm -f "$TMP1" "$TMP2" "$TMP_OUT"' EXIT
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,39 +45,56 @@ require_cmd() {
 # Main
 # ---------------------------------------------------------------------------
 say "============================================"
-say "  DnD Manager v3.1 — Installer"
+say "  DnD Manager — Installer"
+say "  branch: $BRANCH"
 say "============================================"
 say ""
 require_cmd curl
+require_cmd sha256sum
 
 # Test that the repo is reachable
 say "Checking repository access..."
 HTTP_CODE=$(curl -L -s -o /dev/null -w '%{http_code}' "$BASE/install.sh" || echo "000")
 if [ "$HTTP_CODE" = "404" ]; then
     die "Cannot reach $BASE/install.sh (HTTP 404).
-The repository may be private. Make it public on GitHub:
-  Settings → scroll to the bottom → 'Change repository visibility' → Public
-Then re-run this script."
+The branch '$BRANCH' may not exist, or the repo may be private.
+Override the branch with:  BRANCH=some/other-branch bash install.sh"
 elif [ "$HTTP_CODE" != "200" ]; then
-    die "Unexpected HTTP $HTTP_CODE while reaching the repository."
+    die "Unexpected HTTP $HTTP_CODE while reaching $BASE/install.sh"
 fi
 
-say "Downloading part 1 of 2 (about 60 MB)..."
-curl -L --fail --progress-bar -o "$TMP1" "$BASE/DnDManager.part1"
+# Cache-buster query string keeps GitHub's raw CDN from handing us a stale copy.
+CB="?cb=$(date +%s)"
 
-say "Downloading part 2 of 2 (about 52 MB)..."
-curl -L --fail --progress-bar -o "$TMP2" "$BASE/DnDManager.part2"
+say "Downloading part 1 of 2 (~56 MB)..."
+curl -L --fail --progress-bar -o "$TMP1" "$BASE/DnDManager.part1$CB"
+
+say "Downloading part 2 of 2 (~56 MB)..."
+curl -L --fail --progress-bar -o "$TMP2" "$BASE/DnDManager.part2$CB"
 
 # Sanity check: both files should be binary (not the GitHub 404 HTML page)
-if head -c 4 "$TMP1" | grep -aq 'html\|404\|<!DO'; then
+if head -c 16 "$TMP1" | grep -aq 'html\|404\|<!DO'; then
     die "Downloaded part 1 looks like an HTML error page, not the binary."
 fi
-if head -c 4 "$TMP2" | grep -aq 'html\|404\|<!DO'; then
+if head -c 16 "$TMP2" | grep -aq 'html\|404\|<!DO'; then
     die "Downloaded part 2 looks like an HTML error page, not the binary."
 fi
 
 say "Assembling the executable..."
-cat "$TMP1" "$TMP2" > "$DEST"
+cat "$TMP1" "$TMP2" > "$TMP_OUT"
+
+say "Verifying SHA-256..."
+ACTUAL_SHA256=$(sha256sum "$TMP_OUT" | awk '{print $1}')
+if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+    die "Checksum mismatch!
+  expected: $EXPECTED_SHA256
+  got:      $ACTUAL_SHA256
+The downloaded parts are stale or corrupted. Try again in a minute
+(GitHub's raw CDN can cache for ~5 minutes after a push)."
+fi
+say "  OK ($ACTUAL_SHA256)"
+
+mv "$TMP_OUT" "$DEST"
 chmod +x "$DEST"
 say "Saved to: $DEST"
 
