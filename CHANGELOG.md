@@ -1,5 +1,30 @@
 # DnD Manager Changelog
 
+## v3.4.2 — Conflict crash fixes (again) and new dodge formula
+
+### Crashes
+- **Dice entry during conflict.** `_on_dice_commit` now defers the state
+  update via `QTimer.singleShot(0, ...)` so the chained refresh runs after
+  the QSpinBox's editingFinished handler returns, not synchronously inside
+  it. v3.4.1 only changed which signal was emitted; the synchronous
+  re-entry into the same widget's tree was still the actual crash trigger.
+- **Swap primary/secondary during conflict.** Same fix — the click handler
+  now defers via singleShot. Same for equipment dropdown changes
+  (primary / secondary / shield / armor / spell slots).
+- **Vital current/max edits during conflict.** Same pattern — vital bar
+  spinbox `valueChanged` was synchronously firing the refresh chain.
+  The character_changed emission is now deferred.
+
+### Dodge formula
+- Dodge succeeds when the defender's dodge value is greater than the
+  attacker's **dice roll** (was: opponent's highest throw).
+- Stamina cost applies **regardless of outcome**, computed as
+  `ceil(max_stamina / (6 + dodge_value × 4))` per your spec.
+- Conflict log distinguishes between a successful dodge (no damage) and
+  a failed dodge (full damage), and reports the stamina cost.
+
+---
+
 ## v3.4.1 — Crash fixes & realtime refresh
 
 Bug-fix pass on top of v3.4. No schema change.

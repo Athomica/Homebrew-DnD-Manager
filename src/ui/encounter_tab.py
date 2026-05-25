@@ -209,8 +209,16 @@ class CompactCharacterCard(QFrame):
             QMessageBox.information(self, "Turn constraint", msg)
 
     def _on_dice_commit(self) -> None:
-        self._state.record_dice_for_instance(
-            self._instance.instance_id, self._dice_in.value())
+        # v3.4.2: defer the mutation so the state change + chained refresh
+        # runs after the QSpinBox editingFinished handler returns, not inside
+        # it. Repopulating widgets synchronously from a widget's own signal
+        # crashes on some Qt builds.
+        from PyQt6.QtCore import QTimer
+        val = self._dice_in.value()
+        QTimer.singleShot(
+            0,
+            lambda: self._state.record_dice_for_instance(
+                self._instance.instance_id, val))
 
     # -- tab: Combat ----------------------------------------------
     def _build_combat_tab(self) -> None:
@@ -353,11 +361,22 @@ class CompactCharacterCard(QFrame):
         self._tabs.addTab(tab, "Equipment")
 
     def _on_equip_change(self, slot: str, combo: NoWheelComboBox) -> None:
+        # v3.4.2: deferred for the same Qt-popup-still-open reason as
+        # _on_active_form_changed.
+        from PyQt6.QtCore import QTimer
         value = combo.currentData()
-        self._state.set_equipment(self._instance.instance_id, slot, value)
+        QTimer.singleShot(
+            0,
+            lambda: self._state.set_equipment(self._instance.instance_id, slot, value))
 
     def _on_swap_primary_secondary(self) -> None:
-        self._state.swap_primary_secondary(self._instance.instance_id)
+        # v3.4.2: defer for the same reason as _on_dice_commit and
+        # _on_active_form_changed — mutating widgets synchronously from
+        # within a click handler that's about to repopulate them crashes.
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(
+            0,
+            lambda: self._state.swap_primary_secondary(self._instance.instance_id))
 
     # -- tab: Inventory -----------------------------------------------
     def _build_inventory_tab(self) -> None:
@@ -590,7 +609,10 @@ class CompactCharacterCard(QFrame):
         if getattr(c, field, None) == value:
             return
         setattr(c, field, value)
-        self._state.character_changed.emit(c.id)
+        # v3.4.2: defer the signal so refresh chains don't run inside the
+        # source widget's own valueChanged handler.
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._state.character_changed.emit(c.id))
 
     def _refresh_combo(self, combo: NoWheelComboBox, options: list[tuple[str, str | None]],
                        selected_value) -> None:

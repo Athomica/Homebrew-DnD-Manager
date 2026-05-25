@@ -1327,21 +1327,29 @@ class StateManager(QObject):
                 return
             action = enc.left_action if side == "left" else enc.right_action
             if action == "dodge":
-                # If the defender's dodge value beats the attacker's best
-                # throw, they evade entirely and lose 20 stamina.
+                # v3.4.2 spec: dodge succeeds if defender's dodge value beats
+                # the attacker's DICE ROLL (not throw result). Stamina cost
+                # applies regardless of outcome:
+                #   cost = ceil(max_stamina / (6 + dodge_value * 4))
+                import math as _math
                 cb = me.derive_combat_view(
                     defender, self.state.weapons, self.state.armors,
                     self.state.items,
                     spell=self._equipped_spell(defender))
                 dodge_v = cb["dodge"]
-                threshold = self._opponent_throw(attacker)
-                if dodge_v > threshold:
-                    defender.stamina_current = max(0, defender.stamina_current - 20)
+                opp_dice = attacker.dice
+                stam_cost = _math.ceil(
+                    defender.stamina_max / (6 + dodge_v * 4)) if (6 + dodge_v * 4) > 0 else 0
+                defender.stamina_current = max(0, defender.stamina_current - stam_cost)
+                if dodge_v > opp_dice:
                     msgs.append(
                         f"{defender.name} dodged (value {dodge_v:.1f} > "
-                        f"opponent throw {threshold:.1f}); -20 stamina")
+                        f"opponent dice {opp_dice}); -{stam_cost} stamina")
                     return
-                # Fall through to full damage if dodge fails.
+                msgs.append(
+                    f"{defender.name}'s dodge failed (value {dodge_v:.1f} "
+                    f"<= opponent dice {opp_dice}); -{stam_cost} stamina")
+                # Fall through to full damage.
             defender.dmg_received = int(round(incoming))
             cb_def = me.derive_combat_view(
                 defender, self.state.weapons, self.state.armors, self.state.items,
