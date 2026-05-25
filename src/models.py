@@ -36,6 +36,10 @@ class Weapon:
     max_defense: int = 0
     damage_negation: float = 0.0
     weapon_level: int = 1
+    # v3.4: equipment also has a slot count. Counts toward inventory slots
+    # ONLY when the weapon is sitting in the inventory; equipped weapons
+    # contribute zero.
+    slot_count: int = 1
     passives: list[Passive] = field(default_factory=list)
     description: str = ""
 
@@ -47,6 +51,8 @@ class Armor:
     slot: str = "helmet"
     armor_value: int = 0
     armor_level: int = 1
+    # v3.4: same as weapons — slot_count only counts when not equipped.
+    slot_count: int = 1
     passives: list[Passive] = field(default_factory=list)
     description: str = ""
 
@@ -59,37 +65,30 @@ class SpellEffect:
       - 'hp', 'stamina', 'mana'                 (vitals)
       - 'damage'                                (Destruction-school damage)
       - 'armor_sp', 'martial_sp', ..., 'luck_sp' (proficiency SP buffs)
-      - 'Strength', 'Agility', 'Mind',
-        'Dexterity', 'Presence'                  (attribute buffs)
       - 'health_max', 'stamina_max', 'mana_max'  (max vital buffs)
     scope: 'fixed' or 'percent'. Percent values are 0..100 here.
     duration: 'single' (one-shot), 'turns:N' (lasts N turns), 'permanent'.
-    affected_by_throw: multiplies the amount by the caster's relevant throw / 10.
-    affected_by_proficiency: multiplies the amount by (1 + arcana_sp/100).
+    arcana_scaling (v3.4): one toggle replaces the old proficiency+throw
+        pair. When True, the effect amount is scaled by (throw / 10) *
+        (1 + arcana_sp / 100).
     """
     id: str = field(default_factory=lambda: new_id("se"))
     target: str = "hp"
     scope: str = "fixed"
     amount: float = 0.0
     duration: str = "single"
-    affected_by_throw: bool = False
-    affected_by_proficiency: bool = False
+    arcana_scaling: bool = False
 
 
-SPELL_SCHOOLS = ("Destruction", "Alteration", "Conjuration", "Illusion", "Restoration")
+# v3.4: Conjuration and Illusion removed per user spec. Three schools remain.
+SPELL_SCHOOLS = ("Destruction", "Alteration", "Restoration")
 
-# Targets allowed for each school. Destruction is the only school whose
-# `damage` target feeds Arcana ATK in the combat view.
 SPELL_TARGETS_BY_SCHOOL: dict[str, tuple[str, ...]] = {
     "Destruction": ("damage", "hp", "stamina", "mana"),
     "Alteration":  ("armor_sp", "martial_sp", "ranged_sp", "stealth_sp",
                     "arcana_sp", "perception_sp", "acrobatics_sp",
                     "lockpicking_sp", "speech_sp", "luck_sp",
                     "health_max", "stamina_max", "mana_max"),
-    "Conjuration": ("hp", "stamina", "mana"),  # mostly conjures creatures; placeholder
-    "Illusion":    ("armor_sp", "martial_sp", "ranged_sp", "stealth_sp",
-                    "arcana_sp", "perception_sp", "acrobatics_sp",
-                    "lockpicking_sp", "speech_sp", "luck_sp"),
     "Restoration": ("hp", "stamina", "mana", "health_max",
                     "stamina_max", "mana_max"),
 }
@@ -139,6 +138,10 @@ class Form:
     lockpicking_mult: float = 1.0
     speech_mult: float = 1.0
     luck_mult: float = 1.0
+    # v3.4: forms can scale vital max values too. All default to 1.0 = 100%.
+    health_mult: float = 1.0
+    stamina_mult: float = 1.0
+    mana_mult: float = 1.0
     mana_to_enter: float = 0
     maintain_cost: str = "-"
     restrictions: str = ""
@@ -153,10 +156,10 @@ class InventoryEntry:
     id: str = field(default_factory=lambda: new_id("inv"))
     title: str = ""
     item_id: Optional[str] = None
-    # v3.3: weapons can sit in the inventory too (counts toward slot usage,
-    # can be equipped via the encounter card). Only one of item_id/weapon_id
-    # should be set per entry.
+    # v3.3+: weapons and (v3.4) armor can sit in the inventory too. Exactly
+    # one of {item_id, weapon_id, armor_id} should be set per entry.
     weapon_id: Optional[str] = None
+    armor_id: Optional[str] = None
     quantity: int = 1
     notes: str = ""
 
@@ -324,6 +327,16 @@ class Character:
             return 1.0
         return getattr(af, f"{prof_name}_mult", 1.0)
 
+    def vital_max_with_form(self, vital: str) -> int:
+        """Effective max for 'health' / 'stamina' / 'mana' including any
+        active form's vital multiplier."""
+        base = getattr(self, f"{vital}_max", 0)
+        af = self.active_form()
+        if af is None:
+            return base
+        mult = getattr(af, f"{vital}_mult", 1.0)
+        return int(round(base * mult))
+
     def effective_sp(self, prof_name: str) -> float:
         return self.sp_for(prof_name) * self.form_mult(prof_name)
 
@@ -372,16 +385,35 @@ class Character:
         return self.base_max_inventory_slots + self.backpack_slots
 
     def filled_inventory_slots(self, item_list: list[Item],
-                                weapon_list: Optional[list[Weapon]] = None) -> int:
-        by_id = {i.id: i for i in item_list}
+                                weapon_list: Optional[list[Weapon]] = None,
+                                armor_list: Optional[list[Armor]] = None) -> int:
+        items_by_id = {i.id: i for i in item_list}
+        weapons_by_id = {w.id: w for w in (weapon_list or [])}
+        armors_by_id = {a.id: a for a in (armor_list or [])}
+        # v3.4: equipped weapons/armor do NOT count toward inventory slots.
+        equipped_weapons = {wid for wid in (
+            self.primary_weapon_id, self.secondary_weapon_id, self.shield_id)
+            if wid}
+        equipped_armors = {aid for aid in (
+            self.helmet_id, self.chest_id, self.gloves_id,
+            self.pants_id, self.boots_id) if aid}
         total = 0
         for entry in self.inventory:
             slot_cost = 1
-            if entry.item_id and entry.item_id in by_id:
-                slot_cost = by_id[entry.item_id].slot_count
-            elif entry.weapon_id and weapon_list is not None:
-                # Weapons take 1 slot each by default.
-                slot_cost = 1
+            if entry.item_id and entry.item_id in items_by_id:
+                slot_cost = items_by_id[entry.item_id].slot_count
+            elif entry.weapon_id:
+                if entry.weapon_id in equipped_weapons:
+                    continue  # equipped — free
+                if entry.weapon_id in weapons_by_id:
+                    slot_cost = getattr(weapons_by_id[entry.weapon_id],
+                                         "slot_count", 1)
+            elif getattr(entry, "armor_id", None):
+                if entry.armor_id in equipped_armors:
+                    continue
+                if entry.armor_id in armors_by_id:
+                    slot_cost = getattr(armors_by_id[entry.armor_id],
+                                         "slot_count", 1)
             total += entry.quantity * slot_cost
         return total
 
@@ -399,6 +431,9 @@ class EncounterInstance:
 
 @dataclass
 class Encounter:
+    # v3.4: each encounter has a stable id so we can address it across the
+    # multi-encounter tab strip and cross-encounter interactions.
+    id: str = field(default_factory=lambda: new_id("enc"))
     name: str = "Untitled Encounter"
     instances: list[EncounterInstance] = field(default_factory=list)
 
@@ -427,17 +462,24 @@ class Encounter:
     items_used_left: list[str] = field(default_factory=list)
     items_used_right: list[str] = field(default_factory=list)
 
-    # v3.3: Each side picks ONE action per conflict. One of:
-    #   'attack', 'block', 'cast', 'dodge', 'use_item'
-    # 'receiver_only' is still supported via the old flag as a synonym for
-    # 'do nothing offensive' but is no longer the default UI choice.
+    # v3.3/v3.4: Each side picks ONE action per conflict. One of:
+    #   'attack', 'block', 'cast', 'dodge'
+    # (v3.4: 'use_item' was removed — items can only be used between
+    # conflicts, per user direction.)
     left_action: str = "attack"
     right_action: str = "attack"
-    # Extra per-side flags
     left_apply_fall: bool = False
     right_apply_fall: bool = False
-    left_pending_item_id: Optional[str] = None
-    right_pending_item_id: Optional[str] = None
+    left_pending_item_id: Optional[str] = None   # legacy, unused in v3.4
+    right_pending_item_id: Optional[str] = None  # legacy, unused in v3.4
+
+    # v3.4: cross-encounter interaction state. When this encounter is an
+    # interaction (created from two source encounters), `interaction_sources`
+    # holds [(source_encounter_id, source_instance_id), ...]. When this
+    # encounter is *being interacted with* (one of its participants is the
+    # subject of an interaction encounter), it is locked.
+    interaction_sources: list = field(default_factory=list)
+    is_locked_by: Optional[str] = None  # interaction encounter id holding the lock
 
 
 MODIFIER_DEFS: dict[str, tuple[float, bool, str]] = {
@@ -501,5 +543,37 @@ class AppState:
     scaling_modifiers: dict[str, float] = field(default_factory=dict)
     scaling_granularity: dict[str, int] = field(default_factory=dict)
 
-    active_encounter: Optional[Encounter] = None
+    # v3.4: multi-encounter support. `encounters` is the authoritative list of
+    # all active encounters; `active_encounter_id` selects which one the UI
+    # shows by default. The `active_encounter` property exists for code that
+    # still expects a single pointer.
+    encounters: list[Encounter] = field(default_factory=list)
+    active_encounter_id: Optional[str] = None
     developer_view: bool = False
+
+    @property
+    def active_encounter(self) -> Optional[Encounter]:
+        if not self.encounters:
+            return None
+        if self.active_encounter_id:
+            for e in self.encounters:
+                if e.id == self.active_encounter_id:
+                    return e
+        return self.encounters[0]
+
+    @active_encounter.setter
+    def active_encounter(self, value: Optional[Encounter]) -> None:
+        """Backwards-compat setter. Setting to a new Encounter appends it;
+        setting to None clears all encounters. The previously-most-recent
+        encounter loses its 'active' selection."""
+        if value is None:
+            self.encounters = []
+            self.active_encounter_id = None
+            return
+        # If the value is already in the list, just select it.
+        for e in self.encounters:
+            if e is value or e.id == value.id:
+                self.active_encounter_id = value.id
+                return
+        self.encounters.append(value)
+        self.active_encounter_id = value.id

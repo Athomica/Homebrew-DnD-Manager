@@ -449,18 +449,19 @@ def spell_base_damage(spell) -> float:
 
 def spell_effect_amount(effect, caster: Character) -> float:
     """Compute the realized amount for one SpellEffect given the caster's
-    current state (throw result, proficiency). Returns the *absolute* delta
-    to apply to the target attribute.
-
-    Note: this does NOT clamp; the caller is responsible for bounds.
+    current state. v3.4: a single `arcana_scaling` toggle multiplies the
+    amount by (throw / 10) * (1 + arcana_sp / 100). When off, the amount
+    is the raw value (rounded for percent).
     """
     amt = float(effect.amount)
     if effect.scope == "percent":
-        # Percent rounds to non-decimal per spec.
         amt = round(amt)
-    if effect.affected_by_throw:
-        # Throw result for arcana proficiency, normalized at /10 so that a
-        # default throw of 10 leaves the value unchanged.
+    # Honor either the new toggle or the legacy pair (loaded from older
+    # in-memory state during transition).
+    scaled = getattr(effect, "arcana_scaling", False) or \
+        getattr(effect, "affected_by_throw", False) or \
+        getattr(effect, "affected_by_proficiency", False)
+    if scaled:
         try:
             throw = throw_result(caster.effective_sp("arcana"), caster.dice,
                                   dice_bonus(caster.effective_sp("arcana"),
@@ -469,7 +470,6 @@ def spell_effect_amount(effect, caster: Character) -> float:
         except Exception:
             throw = 10.0
         amt *= max(0.0, throw) / 10.0
-    if effect.affected_by_proficiency:
         amt *= (1 + caster.effective_sp("arcana") / 100.0)
     return amt
 

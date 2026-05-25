@@ -46,7 +46,7 @@ for d in (SAVES_DIR, AUTOSAVE_DIR, BACKUP_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +182,40 @@ def _migrate_4_to_5(d: dict) -> dict:
     return d
 
 
+def _migrate_6_to_7(d: dict) -> dict:
+    """v6 -> v7: multi-encounter list; SpellEffect.arcana_scaling replaces
+    the two flags; remove Conjuration/Illusion schools; equipment slot_count;
+    Form vital mults."""
+    # Spells: collapse the two flags into arcana_scaling; normalize school.
+    for s in d.get("spells", []):
+        if s.get("school") in ("Conjuration", "Illusion"):
+            s["school"] = "Destruction"
+        for eff in s.get("effects", []) or []:
+            eff.setdefault("arcana_scaling",
+                            bool(eff.get("affected_by_throw")
+                                  or eff.get("affected_by_proficiency")))
+            eff.pop("affected_by_throw", None)
+            eff.pop("affected_by_proficiency", None)
+    # Multi-encounter: wrap legacy single encounter into a list.
+    ae = d.get("active_encounter")
+    enc_list = d.get("encounters")
+    if enc_list is None:
+        enc_list = [ae] if ae else []
+    # Ensure every encounter has an id.
+    for e in enc_list:
+        if e is None:
+            continue
+        e.setdefault("id", new_id("enc"))
+        e.setdefault("interaction_sources", [])
+        e.setdefault("is_locked_by", None)
+    d["encounters"] = enc_list
+    d["active_encounter_id"] = (enc_list[0]["id"]
+                                 if enc_list and enc_list[0] else None)
+    d.pop("active_encounter", None)
+    d["schema_version"] = 7
+    return d
+
+
 def _migrate_5_to_6(d: dict) -> dict:
     """v5 -> v6: spell effect list; encounter action fields; v3.3 niceties.
     For each spell with legacy `damage > 0`, synthesize a single Destruction
@@ -222,6 +256,9 @@ def hydrate_app_state(d: dict) -> AppState:
     if version < 6:
         d = _migrate_5_to_6(d)
         version = 6
+    if version < 7:
+        d = _migrate_6_to_7(d)
+        version = 7
     if version > SCHEMA_VERSION:
         raise ValueError(
             f"Save file schema_version={version} is newer than supported "
@@ -245,10 +282,11 @@ def hydrate_app_state(d: dict) -> AppState:
         combat_log=d.get("combat_log", []),
         scaling_modifiers=d.get("scaling_modifiers", {}) or {},
         scaling_granularity=d.get("scaling_granularity", {}) or {},
+        encounters=[_hydrate_encounter(e) for e in (d.get("encounters") or [])
+                     if e is not None],
+        active_encounter_id=d.get("active_encounter_id"),
         developer_view=bool(d.get("developer_view", False)),
     )
-    ae = d.get("active_encounter")
-    state.active_encounter = _hydrate_encounter(ae) if ae else None
     return state
 
 
@@ -663,14 +701,35 @@ class StateManager(QObject):
 
     # -- Encounter system ----------------------------------------------
     def start_encounter(self, name: str = "") -> Encounter:
+        """Backwards-compat: returns the existing active encounter if there
+        is one, otherwise creates a new one (and selects it). For multi-
+        encounter UIs use `add_encounter` to always make a new one."""
         if self.state.active_encounter is None:
-            self.state.active_encounter = Encounter(
-                name=name or f"Encounter {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-            self.log_event("encounter_started",
-                           f"Encounter '{self.state.active_encounter.name}' started",
-                           category="combat")
-            self.encounter_changed.emit()
+            return self.add_encounter(name)
         return self.state.active_encounter
+
+    def add_encounter(self, name: str = "") -> Encounter:
+        """v3.4: always create a new encounter and select it."""
+        enc = Encounter(
+            name=name or f"Encounter {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        self.state.encounters.append(enc)
+        self.state.active_encounter_id = enc.id
+        self.log_event("encounter_started",
+                       f"Encounter '{enc.name}' started",
+                       category="combat")
+        self.encounter_changed.emit()
+        return enc
+
+    def select_encounter(self, encounter_id: Optional[str]) -> None:
+        """Switch which encounter the UI shows."""
+        self.state.active_encounter_id = encounter_id
+        self.encounter_changed.emit()
+
+    def get_encounter(self, encounter_id: str) -> Optional[Encounter]:
+        for e in self.state.encounters:
+            if e.id == encounter_id:
+                return e
+        return None
 
     def rename_encounter(self, new_name: str) -> None:
         if self.state.active_encounter is None:
@@ -684,12 +743,13 @@ class StateManager(QObject):
         self.encounter_changed.emit()
 
     def is_character_in_encounter(self, character_id: str) -> bool:
-        enc = self.state.active_encounter
-        if enc is None:
-            return False
-        for inst in enc.instances:
-            if inst.source_character_id == character_id and not inst.is_template_instance:
-                return True
+        """v3.4: a unique character is "in an encounter" if it appears as a
+        non-template instance in ANY encounter."""
+        for enc in self.state.encounters:
+            for inst in enc.instances:
+                if (inst.source_character_id == character_id
+                        and not inst.is_template_instance):
+                    return True
         return False
 
     def is_character_locked(self, character_id: str) -> bool:
@@ -697,16 +757,27 @@ class StateManager(QObject):
 
     def add_character_to_encounter(self, source: Character) -> tuple[bool, str, Optional[EncounterInstance]]:
         enc = self.start_encounter()
-        # Unique character constraint: only one instance at a time
+        # Unique character constraint (v3.4): a unique character can only be
+        # in ONE encounter at a time across the whole campaign.
         if not source.is_template:
-            for inst in enc.instances:
-                if inst.source_character_id == source.id:
-                    if inst.is_in_bin:
+            for other_enc in self.state.encounters:
+                for inst in other_enc.instances:
+                    if (inst.source_character_id == source.id
+                            and not inst.is_template_instance):
+                        if inst.is_in_bin:
+                            return (False,
+                                    f"'{source.name}' is in the encounter bin of "
+                                    f"'{other_enc.name}'. Restore from bin or "
+                                    f"end that encounter.",
+                                    None)
+                        if other_enc.id == enc.id:
+                            return (False,
+                                    f"'{source.name}' is already in this encounter.",
+                                    None)
                         return (False,
-                                f"'{source.name}' is in the encounter bin. "
-                                f"Restore from bin or end the encounter.",
-                                None)
-                    return (False, f"'{source.name}' is already in the encounter.", None)
+                                f"'{source.name}' is already in encounter "
+                                f"'{other_enc.name}'. A unique character can "
+                                f"only be in one encounter at a time.", None)
         # Copy the character; for templates, reset current vitals to max
         cclone = copy.deepcopy(source)
         cclone.id = new_id("c")  # encounter copy has its own id
@@ -1427,7 +1498,12 @@ class StateManager(QObject):
                f"{survivors} unique character(s) updated, "
                f"{new_uniques} new unique character(s) from templates.")
         self.log_event("encounter_ended", msg, category="combat")
-        self.state.active_encounter = None
+        # v3.4: remove only THIS encounter from the list; select another if any.
+        ended_id = enc.id
+        self.state.encounters = [e for e in self.state.encounters if e.id != ended_id]
+        if self.state.active_encounter_id == ended_id:
+            self.state.active_encounter_id = (
+                self.state.encounters[0].id if self.state.encounters else None)
         self.encounter_changed.emit()
         self.lists_changed.emit()
         return msg

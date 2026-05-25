@@ -266,7 +266,7 @@ class TestMigrationV3toV4(unittest.TestCase):
             "change_log": [], "combat_log": [],
         }
         state = hydrate_app_state(v3_save)
-        self.assertEqual(state.schema_version, 6)
+        self.assertEqual(state.schema_version, 7)
         self.assertEqual(len(state.party), 1)
         self.assertEqual(len(state.mobs), 1)
         self.assertEqual(state.mobs[0].name, "Goblin")

@@ -968,10 +968,14 @@ class CharacterSheet(QWidget):
         top.addWidget(self._enter_form_btn)
         outer.addLayout(top)
 
-        self._forms_table = QTableWidget(0, 12)
+        # v3.4: forms display multipliers as percentages (100% = no change)
+        # and gain three vital columns (HP / Stamina / Mana). All multiplier
+        # cells accept either "120%" or "1.2" on input.
+        self._forms_table = QTableWidget(0, 15)
         self._forms_table.setHorizontalHeaderLabels([
-            "Name", "Armor×", "Martial×", "Ranged×", "Stealth×",
-            "Arcana×", "Perc×", "Acro×", "Lock×", "Speech×", "Luck×", "Inv max",
+            "Name", "Armor %", "Martial %", "Ranged %", "Stealth %",
+            "Arcana %", "Perc %", "Acro %", "Lock %", "Speech %", "Luck %",
+            "HP %", "Stam %", "Mana %", "Inv max",
         ])
         self._forms_table.verticalHeader().setVisible(False)
         self._forms_table.horizontalHeader().setSectionResizeMode(
@@ -1046,17 +1050,24 @@ class CharacterSheet(QWidget):
         if row < 0 or row >= len(self._char.forms):
             return
         f = self._char.forms[row]
-        text = item.text()
+        text = item.text().strip()
         try:
             if col == 0:
                 f.name = text
-            elif col == 11:
-                f.inventory_slot_override = int(text) if text.strip() else None
+            elif col == 14:
+                f.inventory_slot_override = int(text) if text else None
             else:
+                # v3.4: 10 proficiency mults (cols 1..10) + 3 vital mults (11..13)
                 mults = ["armor_mult", "martial_mult", "ranged_mult", "stealth_mult",
                          "arcana_mult", "perception_mult", "acrobatics_mult",
-                         "lockpicking_mult", "speech_mult", "luck_mult"]
-                setattr(f, mults[col - 1], float(text))
+                         "lockpicking_mult", "speech_mult", "luck_mult",
+                         "health_mult", "stamina_mult", "mana_mult"]
+                # Accept "120%" or "1.2"
+                txt = text.rstrip("%").strip()
+                val = float(txt) if txt else 1.0
+                if text.endswith("%") or val > 5:
+                    val = val / 100.0
+                setattr(f, mults[col - 1], val)
         except (ValueError, IndexError):
             pass
         self._refresh_derived()
@@ -1297,7 +1308,9 @@ class CharacterSheet(QWidget):
         self._armor_total_label.setText(f"Total Armor: {sum(p.armor_value for p in pieces)}")
 
         # Inventory filled/max labels
-        filled = self._char.filled_inventory_slots(self._state.state.items)
+        filled = self._char.filled_inventory_slots(
+            self._state.state.items, self._state.state.weapons,
+            self._state.state.armors)
         mx = self._char.max_inventory_slots()
         self._inv_filled_label.setText(f"Filled: {filled}")
         self._inv_max_label.setText(f"Max: {mx}")
@@ -1379,14 +1392,19 @@ class CharacterSheet(QWidget):
                 r = self._forms_table.rowCount()
                 self._forms_table.insertRow(r)
                 self._forms_table.setItem(r, 0, QTableWidgetItem(f.name))
+                # v3.4: 10 prof mults + 3 vital mults, shown as percentages.
                 mults = [f.armor_mult, f.martial_mult, f.ranged_mult, f.stealth_mult,
                          f.arcana_mult, f.perception_mult, f.acrobatics_mult,
-                         f.lockpicking_mult, f.speech_mult, f.luck_mult]
+                         f.lockpicking_mult, f.speech_mult, f.luck_mult,
+                         getattr(f, "health_mult", 1.0),
+                         getattr(f, "stamina_mult", 1.0),
+                         getattr(f, "mana_mult", 1.0)]
                 for i, m in enumerate(mults, start=1):
-                    self._forms_table.setItem(r, i, QTableWidgetItem(f"{m:g}"))
+                    self._forms_table.setItem(
+                        r, i, QTableWidgetItem(f"{int(round(m * 100))}%"))
                 inv = ("" if f.inventory_slot_override is None
                        else str(f.inventory_slot_override))
-                self._forms_table.setItem(r, 11, QTableWidgetItem(inv))
+                self._forms_table.setItem(r, 14, QTableWidgetItem(inv))
         finally:
             self._suspend = False
 
@@ -1432,17 +1450,23 @@ class CharacterSheet(QWidget):
                             combo.setCurrentIndex(i)
                             break
             self._add_spell_combo.clear()
+            # v3.4: filter by arcana_level <= character's arcana proficiency.
             for s in self._state.state.spells:
-                self._add_spell_combo.addItem(f"{s.name} (mana {s.mana_cost})", s.id)
+                if s.arcana_level > self._char.arcana_sp:
+                    continue
+                self._add_spell_combo.addItem(
+                    f"{s.name} (mana {s.mana_cost}, lvl {s.arcana_level})", s.id)
             self._inv_item_combo.clear()
             self._inv_item_combo.addItem("(freeform)", None)
             for it in self._state.state.items:
                 self._inv_item_combo.addItem(f"{it.name} (slot {it.slot_count})", it.id)
-            # v3.2: staff spell slots — restricted to spells the character knows
+            # v3.2/v3.4: staff spell slots — restricted to spells the
+            # character knows AND that meet the arcana_level requirement.
             if hasattr(self, "_primary_spell_combo"):
                 known_ids = set(self._char.spell_ids)
                 known_spells = [s for s in self._state.state.spells
-                                if s.id in known_ids]
+                                if s.id in known_ids
+                                and s.arcana_level <= self._char.arcana_sp]
                 for combo, current in (
                     (self._primary_spell_combo, self._char.primary_spell_id),
                     (self._secondary_spell_combo, self._char.secondary_spell_id),

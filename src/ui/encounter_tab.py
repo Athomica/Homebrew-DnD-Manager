@@ -166,15 +166,29 @@ class CompactCharacterCard(QFrame):
         if instance.character.is_shapeshifter or instance.character.forms:
             self._build_forms_tab()
 
+        # v3.4: listen to character_changed and lists_changed too, so things
+        # like fall damage, spell lists, and equipment swaps reflect in real
+        # time without needing to re-enter the encounter.
         self._state.encounter_changed.connect(self._refresh)
+        self._state.character_changed.connect(self._on_char_changed)
+        self._state.lists_changed.connect(self._refresh)
         self._refresh()
         _fade_in(self)
 
+    def _on_char_changed(self, cid: str) -> None:
+        if cid == self._instance.character.id:
+            self._refresh()
+
     def cleanup(self) -> None:
-        try:
-            self._state.encounter_changed.disconnect(self._refresh)
-        except (TypeError, RuntimeError):
-            pass
+        for sig, slot in (
+            (self._state.encounter_changed, self._refresh),
+            (self._state.character_changed, self._on_char_changed),
+            (self._state.lists_changed, self._refresh),
+        ):
+            try:
+                sig.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
 
     def set_conflict_border(self, active: bool) -> None:
         self.setStyleSheet(self._conflict_style if active else self._normal_style)
@@ -603,7 +617,8 @@ class CompactCharacterCard(QFrame):
                 line = f"{entry.quantity}× {entry.title or '(empty)'}"
             self._inv_list.addItem(line)
         filled = char.filled_inventory_slots(self._state.state.items,
-                                              self._state.state.weapons)
+                                              self._state.state.weapons,
+                                              self._state.state.armors)
         mx = char.max_inventory_slots()
         self._inv_summary.setText(f"Filled {filled} / {mx}")
         # Repopulate add-combos
@@ -629,9 +644,11 @@ class CompactCharacterCard(QFrame):
         shields = [(f"[S] {w.name}", w.id) for w in self._state.state.weapons
                    if w.is_shield]
         self._refresh_combo(self._shield_combo, shields, char.shield_id)
-        # Spell slots — show only if the corresponding weapon is a staff.
-        known = [(f"{s.name} ({s.school})", s.id) for s in self._state.state.spells
-                 if s.id in char.spell_ids]
+        # Spell slots — only known spells AND those meeting arcana_level.
+        known = [(f"{s.name} ({s.school}, lvl {s.arcana_level})", s.id)
+                 for s in self._state.state.spells
+                 if s.id in char.spell_ids
+                 and s.arcana_level <= char.arcana_sp]
         self._refresh_combo(self._primary_spell_combo, known, char.primary_spell_id)
         self._refresh_combo(self._secondary_spell_combo, known, char.secondary_spell_id)
         weapons_by_id = {w.id: w for w in self._state.state.weapons}
@@ -780,13 +797,23 @@ class CompactCharacterCard(QFrame):
         if hasattr(self, "_form_combo"):
             self._refresh_forms()
 
+        # v3.4: items can't be used during a conflict — that would let the
+        # player both drink a potion AND attack in the same round.
+        enc = self._state.state.active_encounter
+        in_conflict = enc is not None and enc.in_conflict_mode
+        if hasattr(self, "_use_item_btn"):
+            self._use_item_btn.setEnabled(not in_conflict)
+            self._use_item_btn.setToolTip(
+                "Items can't be used during a conflict. Resolve or exit "
+                "the conflict first." if in_conflict else "")
+
 
 # ---------------------------------------------------------------------------
 # Conflict panel — v3.3 action-based
 # ---------------------------------------------------------------------------
 
 ACTIONS = (("attack", "Attack"), ("block", "Block"), ("cast", "Cast"),
-            ("dodge", "Dodge"), ("use_item", "Use item"))
+            ("dodge", "Dodge"))
 
 
 class ConflictPanel(QGroupBox):
@@ -795,116 +822,136 @@ class ConflictPanel(QGroupBox):
     def __init__(self, state: StateManager, parent: QWidget | None = None) -> None:
         super().__init__("Conflict Resolution", parent)
         self._state = state
-        self.setMinimumWidth(440)
+        # v3.4: removed setMinimumWidth so the panel can share thirds with
+        # the left/right pages.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(10, 16, 10, 10); outer.setSpacing(10)
+        outer.setContentsMargins(8, 14, 8, 8); outer.setSpacing(8)
         info = QLabel("Each side picks ONE action. Equipment & inventory swaps "
-                       "are free and can be done in the side-page tabs.")
+                       "are free in the side-page tabs.")
         info.setWordWrap(True); info.setProperty("role", "dim")
         outer.addWidget(info)
 
-        cols = QHBoxLayout(); cols.setSpacing(20)
+        # v3.4: stack sides VERTICALLY in the narrow middle column so the
+        # text doesn't get clipped.
         self._left_col = self._build_side("left")
+        outer.addWidget(self._left_col["box"])
+        outer.addWidget(self._right_col_separator())
         self._right_col = self._build_side("right")
-        cols.addLayout(self._left_col["layout"], 1)
-        cols.addLayout(self._right_col["layout"], 1)
-        outer.addLayout(cols)
+        outer.addWidget(self._right_col["box"])
         outer.addStretch(1)
 
         self._state.encounter_changed.connect(self.refresh)
+        self._state.character_changed.connect(lambda _cid: self.refresh())
         self.refresh()
         _fade_in(self)
 
+    def _right_col_separator(self) -> QFrame:
+        s = QFrame()
+        s.setFrameShape(QFrame.Shape.HLine)
+        s.setStyleSheet("background-color: #333333; max-height: 1px;")
+        return s
+
     def _build_side(self, side: str) -> dict:
-        layout = QVBoxLayout(); layout.setSpacing(6)
+        # v3.4: each side gets a wrapping QGroupBox so the panel can lay them
+        # out vertically and still keep visual separation.
+        box = QGroupBox(side.title())
+        layout = QVBoxLayout(box); layout.setSpacing(4)
+        layout.setContentsMargins(8, 14, 8, 6)
         name_lbl = QLabel("(no character)"); name_lbl.setProperty("role", "header")
         layout.addWidget(name_lbl)
 
-        action_group = QButtonGroup(self)
+        # Action row — 4 radios in a flow.
+        action_group = QButtonGroup(box)
         action_radios: dict[str, QRadioButton] = {}
+        action_row = QHBoxLayout()
+        action_row.setSpacing(4)
         for key, label in ACTIONS:
             rb = QRadioButton(label)
             action_group.addButton(rb)
             action_radios[key] = rb
-            layout.addWidget(rb)
+            # v3.4: direct mutation, no refresh-loop. The refresh handler
+            # below only updates derived numbers.
+            rb.toggled.connect(self._on_action_toggled_factory(side, key))
+            action_row.addWidget(rb)
+        action_row.addStretch(1)
+        # Initial selection — block signals so we don't fire refresh() before
+        # the second column even exists.
+        action_radios["attack"].blockSignals(True)
         action_radios["attack"].setChecked(True)
+        action_radios["attack"].blockSignals(False)
+        layout.addLayout(action_row)
 
-        # ATK type sub-radios (visible when action == "attack")
+        # ATK type sub-radios (visible only when action == "attack")
         atk_box = QFrame()
-        atk_l = QHBoxLayout(atk_box); atk_l.setContentsMargins(20, 0, 0, 0)
-        atk_group = QButtonGroup(self)
+        atk_l = QHBoxLayout(atk_box); atk_l.setContentsMargins(16, 0, 0, 0)
+        atk_l.setSpacing(4)
+        atk_group = QButtonGroup(box)
         atk_radios: dict[str, QRadioButton] = {}
         for k in self.ATK_KINDS:
             rb = QRadioButton(k.title())
             atk_group.addButton(rb)
             atk_l.addWidget(rb)
             atk_radios[k] = rb
-        atk_radios["martial"].setChecked(True)
+            rb.toggled.connect(self._on_atk_toggled_factory(side, k))
         atk_l.addStretch(1)
+        atk_radios["martial"].blockSignals(True)
+        atk_radios["martial"].setChecked(True)
+        atk_radios["martial"].blockSignals(False)
         layout.addWidget(atk_box)
 
-        # Item dropdown (visible when action == "use_item")
-        item_row = QHBoxLayout(); item_row.setContentsMargins(20, 0, 0, 0)
-        item_row.addWidget(QLabel("Item:"))
-        item_combo = NoWheelComboBox()
-        item_row.addWidget(item_combo, 1)
-        item_wrap = QFrame(); item_wrap.setLayout(item_row)
-        layout.addWidget(item_wrap)
-
-        # Outcome labels
+        # Outcome labels (always shown, smaller text so they fit a 1/3 column)
         dmg_dealt = QLabel("Damage dealt:   -")
-        dmg_dealt.setStyleSheet("color: #44af69; font-weight: bold; padding: 2px;")
-        dmg_dealt.setWordWrap(True)
+        dmg_dealt.setStyleSheet("color: #44af69; font-weight: bold;")
         dmg_recv = QLabel("Damage received:   -")
-        dmg_recv.setStyleSheet("color: #f72c25; font-weight: bold; padding: 2px;")
-        dmg_recv.setWordWrap(True)
+        dmg_recv.setStyleSheet("color: #f72c25; font-weight: bold;")
         stam_cost = QLabel("Stamina cost:   -")
-        stam_cost.setStyleSheet("color: #f72c25; padding: 2px;")
-        stam_cost.setWordWrap(True)
+        stam_cost.setStyleSheet("color: #f72c25;")
         mana_cost = QLabel("Mana cost:   -")
-        mana_cost.setStyleSheet("color: #4a9ad7; padding: 2px;")
-        mana_cost.setWordWrap(True)
-        layout.addWidget(dmg_dealt); layout.addWidget(dmg_recv)
-        layout.addWidget(stam_cost); layout.addWidget(mana_cost)
-        layout.addStretch(1)
-
-        for rb in action_radios.values():
-            rb.toggled.connect(self.refresh)
-        for rb in atk_radios.values():
-            rb.toggled.connect(self.refresh)
-        item_combo.currentIndexChanged.connect(self.refresh)
+        mana_cost.setStyleSheet("color: #4a9ad7;")
+        for lbl in (dmg_dealt, dmg_recv, stam_cost, mana_cost):
+            lbl.setWordWrap(True)
+            layout.addWidget(lbl)
 
         return {
-            "side": side, "layout": layout, "name_lbl": name_lbl,
+            "side": side, "box": box, "name_lbl": name_lbl,
             "action_radios": action_radios, "atk_radios": atk_radios,
-            "atk_box": atk_box, "item_wrap": item_wrap, "item_combo": item_combo,
+            "atk_box": atk_box,
             "dmg_dealt": dmg_dealt, "dmg_recv": dmg_recv,
             "stam_cost": stam_cost, "mana_cost": mana_cost,
         }
 
-    def _populate_items(self, combo: NoWheelComboBox, char: Character,
-                        current: Optional[str]) -> None:
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItem("(pick an item)", None)
-        items_by_id = {i.id: i for i in self._state.state.items}
-        seen = set()
-        for entry in char.inventory:
-            if not entry.item_id or entry.item_id in seen:
-                continue
-            seen.add(entry.item_id)
-            it = items_by_id.get(entry.item_id)
-            if it is None:
-                continue
-            combo.addItem(f"{it.name}", it.id)
-        if current:
-            for i in range(combo.count()):
-                if combo.itemData(i) == current:
-                    combo.setCurrentIndex(i)
-                    break
-        combo.blockSignals(False)
+    def _on_action_toggled_factory(self, side: str, key: str):
+        def handler(checked: bool) -> None:
+            if not checked:
+                return
+            enc = self._state.state.active_encounter
+            if enc is None:
+                return
+            if side == "left":
+                enc.left_action = key
+            else:
+                enc.right_action = key
+            self.refresh()
+        return handler
+
+    def _on_atk_toggled_factory(self, side: str, key: str):
+        def handler(checked: bool) -> None:
+            if not checked:
+                return
+            enc = self._state.state.active_encounter
+            if enc is None:
+                return
+            if side == "left":
+                enc.left_atk_selection = key
+            else:
+                enc.right_atk_selection = key
+            self.refresh()
+        return handler
 
     def refresh(self) -> None:
+        """v3.4: pure display refresh. Radios mutate enc state directly via
+        their toggled handlers — this method never writes back."""
         enc = self._state.state.active_encounter
         if enc is None or not enc.in_conflict_mode:
             return
@@ -919,25 +966,17 @@ class ConflictPanel(QGroupBox):
                     col[lbl_key].setText(f"{prefix}:   -")
                 continue
             col["name_lbl"].setText(inst.character.name)
-
-            # Selected action
             cur_action = (enc.left_action if side == "left" else enc.right_action)
+            # Sync radio state to enc, but don't fire handlers while doing so.
             for k, rb in col["action_radios"].items():
-                rb.blockSignals(True); rb.setChecked(k == cur_action); rb.blockSignals(False)
-
-            # ATK sub-selection
+                if rb.isChecked() != (k == cur_action):
+                    rb.blockSignals(True); rb.setChecked(k == cur_action); rb.blockSignals(False)
             sel = enc.left_atk_selection if side == "left" else enc.right_atk_selection
             for k, rb in col["atk_radios"].items():
-                rb.blockSignals(True); rb.setChecked(k == sel); rb.blockSignals(False)
+                if rb.isChecked() != (k == sel):
+                    rb.blockSignals(True); rb.setChecked(k == sel); rb.blockSignals(False)
             col["atk_box"].setVisible(cur_action == "attack")
-            col["item_wrap"].setVisible(cur_action == "use_item")
 
-            # Populate item combo
-            self._populate_items(col["item_combo"], inst.character,
-                                  enc.left_pending_item_id if side == "left"
-                                  else enc.right_pending_item_id)
-
-            # Damage dealt + cost preview
             stam_cost = mana_cost = 0
             atk_val = 0.0
             if cur_action == "attack":
@@ -957,12 +996,10 @@ class ConflictPanel(QGroupBox):
                 shield = inst.character.get_shield(self._state.state.weapons)
                 if shield:
                     stam_cost = shield.block_cost
-            # dodge: no cost upfront; if successful, -20 stamina (handled in resolve)
             col["dmg_dealt"].setText(f"Damage dealt:   {atk_val:.1f}")
             col["stam_cost"].setText(f"Stamina cost:   {stam_cost}")
             col["mana_cost"].setText(f"Mana cost:   {mana_cost}")
 
-        # Damage received estimate (mirror of opponent's damage dealt)
         l_inst = self._state.active_instance("left")
         r_inst = self._state.active_instance("right")
         if l_inst and r_inst and l_inst.character and r_inst.character:
@@ -972,28 +1009,6 @@ class ConflictPanel(QGroupBox):
                                               enc.right_atk_selection)
             self._left_col["dmg_recv"].setText(f"Damage received:   {r_atk:.1f}")
             self._right_col["dmg_recv"].setText(f"Damage received:   {l_atk:.1f}")
-
-        # Commit selections back
-        for side, col in (("left", self._left_col), ("right", self._right_col)):
-            for k, rb in col["action_radios"].items():
-                if rb.isChecked():
-                    if side == "left":
-                        enc.left_action = k
-                    else:
-                        enc.right_action = k
-                    break
-            for k, rb in col["atk_radios"].items():
-                if rb.isChecked():
-                    if side == "left":
-                        enc.left_atk_selection = k
-                    else:
-                        enc.right_atk_selection = k
-                    break
-            item_id = col["item_combo"].currentData()
-            if side == "left":
-                enc.left_pending_item_id = item_id
-            else:
-                enc.right_pending_item_id = item_id
 
     def _outgoing_for_panel(self, char: Character, action: str, sel: str) -> float:
         if action == "attack":
@@ -1022,6 +1037,19 @@ class EncounterTab(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8); outer.setSpacing(10)
+
+        # v3.4: encounter tab strip on top — one tab per active encounter.
+        enc_tabs_row = QHBoxLayout(); enc_tabs_row.setSpacing(6)
+        enc_tabs_row.addWidget(QLabel("Encounters:"))
+        self._enc_tab_bar = QTabWidget()
+        self._enc_tab_bar.setDocumentMode(True)
+        self._enc_tab_bar.setTabsClosable(False)
+        self._enc_tab_bar.currentChanged.connect(self._on_enc_tab_changed)
+        enc_tabs_row.addWidget(self._enc_tab_bar, 1)
+        new_enc_btn = QPushButton("+ New encounter")
+        new_enc_btn.clicked.connect(self._on_new_encounter)
+        enc_tabs_row.addWidget(new_enc_btn)
+        outer.addLayout(enc_tabs_row)
 
         toolbar = QHBoxLayout(); toolbar.setSpacing(10)
         self._start_btn = QPushButton("Start Encounter"); self._start_btn.setProperty("role", "primary")
@@ -1052,7 +1080,11 @@ class EncounterTab(QWidget):
         self._left_empty.setProperty("role", "dim")
         self._left_inner.addWidget(self._left_empty)
 
-        self._middle = QFrame(); self._middle.setMinimumWidth(360); self._middle.setMaximumWidth(480)
+        # v3.4: middle column shares thirds with the side pages. No more
+        # min/max width clamps — let the layout breathe.
+        self._middle = QFrame()
+        self._middle.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                     QSizePolicy.Policy.Expanding)
         self._middle_layout = QVBoxLayout(self._middle)
         self._middle_layout.setContentsMargins(4, 4, 4, 4); self._middle_layout.setSpacing(8)
 
@@ -1070,9 +1102,11 @@ class EncounterTab(QWidget):
         self._right_empty.setProperty("role", "dim")
         self._right_inner.addWidget(self._right_empty)
 
-        main_row.addWidget(self._left_container, 4)
-        main_row.addWidget(self._middle, 0)
-        main_row.addWidget(self._right_container, 4)
+        # v3.4: equal-thirds stretch so the Conflict Resolution panel
+        # doesn't squeeze the side pages.
+        main_row.addWidget(self._left_container, 1)
+        main_row.addWidget(self._middle, 1)
+        main_row.addWidget(self._right_container, 1)
         outer.addLayout(main_row, 1)
 
         bin_header = QLabel("Encounter Bin (removed characters — click to restore):")
@@ -1088,6 +1122,40 @@ class EncounterTab(QWidget):
         self._state.encounter_changed.connect(self.refresh)
         self._state.lists_changed.connect(self.refresh)
         self.refresh()
+
+    # -- multi-encounter handlers --------------------------------
+    def _on_new_encounter(self) -> None:
+        self._state.add_encounter()
+
+    def _on_enc_tab_changed(self, idx: int) -> None:
+        if idx < 0:
+            return
+        eid = self._enc_tab_bar.tabBar().tabData(idx)
+        if eid and eid != self._state.state.active_encounter_id:
+            self._state.select_encounter(eid)
+
+    def _rebuild_enc_tab_bar(self) -> None:
+        self._enc_tab_bar.blockSignals(True)
+        # Clear existing tabs without firing currentChanged signals.
+        while self._enc_tab_bar.count() > 0:
+            self._enc_tab_bar.removeTab(0)
+        active_id = self._state.state.active_encounter_id
+        active_idx = 0
+        for i, enc in enumerate(self._state.state.encounters):
+            placeholder = QWidget()
+            label = enc.name
+            if enc.in_conflict_mode:
+                label += " (conflict)"
+            if enc.is_locked_by:
+                label += " 🔒"
+            self._enc_tab_bar.addTab(placeholder, label)
+            self._enc_tab_bar.tabBar().setTabData(i, enc.id)
+            if enc.id == active_id:
+                active_idx = i
+        if self._enc_tab_bar.count() > 0:
+            self._enc_tab_bar.setCurrentIndex(active_idx)
+        self._enc_tab_bar.blockSignals(False)
+        self._enc_tab_bar.setVisible(self._enc_tab_bar.count() > 0)
 
     # -- handlers ------------------------------------------------
     def _on_start_encounter(self) -> None:
@@ -1266,6 +1334,8 @@ class EncounterTab(QWidget):
         return wrap
 
     def refresh(self) -> None:
+        # v3.4: rebuild the encounter tab strip first.
+        self._rebuild_enc_tab_bar()
         enc = self._state.state.active_encounter
         self._start_btn.setVisible(enc is None)
         self._begin_combat_btn.setVisible(enc is not None and not enc.is_started)

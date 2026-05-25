@@ -106,6 +106,9 @@ class WeaponsListTab(QWidget):
         self._dmg_neg_in.setDecimals(0)
         self._dmg_neg_in.setSuffix(" %")
         self._level_in = QSpinBox(); self._level_in.setRange(1, 100)
+        # v3.4: inventory slot count when carried (not equipped).
+        self._slot_count_in = QSpinBox(); self._slot_count_in.setRange(0, 999)
+        self._slot_count_in.setValue(1)
         self._desc_in = QPlainTextEdit(); self._desc_in.setFixedHeight(60)
 
         form.addRow("Name:", self._name_in)
@@ -118,6 +121,7 @@ class WeaponsListTab(QWidget):
         form.addRow("Max Defense:", self._max_def_in)
         form.addRow("Damage Negation:", self._dmg_neg_in)
         form.addRow("Weapon Level:", self._level_in)
+        form.addRow("Inventory Slots (when carried):", self._slot_count_in)
         form.addRow("Description:", self._desc_in)
         form_outer.addLayout(form)
 
@@ -201,6 +205,7 @@ class WeaponsListTab(QWidget):
         self._max_def_in.setValue(w.max_defense)
         self._dmg_neg_in.setValue(w.damage_negation * 100.0)
         self._level_in.setValue(w.weapon_level)
+        self._slot_count_in.setValue(getattr(w, "slot_count", 1))
         self._desc_in.setPlainText(w.description)
         self._passive_editor.load(w.passives)
 
@@ -220,6 +225,7 @@ class WeaponsListTab(QWidget):
         w.max_defense = self._max_def_in.value()
         w.damage_negation = self._dmg_neg_in.value() / 100.0
         w.weapon_level = self._level_in.value()
+        w.slot_count = self._slot_count_in.value()
         w.description = self._desc_in.toPlainText()
         self._state.log_event("weapon_edited", f"Edited weapon '{w.name}'",
                               category="change")
@@ -294,11 +300,14 @@ class ArmorListTab(QWidget):
         self._slot_in = QComboBox(); self._slot_in.addItems(ARMOR_SLOTS)
         self._av_in = QSpinBox(); self._av_in.setRange(0, 99999)
         self._lvl_in = QSpinBox(); self._lvl_in.setRange(1, 100)
+        self._slot_count_in = QSpinBox(); self._slot_count_in.setRange(0, 999)
+        self._slot_count_in.setValue(1)
         self._desc_in = QPlainTextEdit(); self._desc_in.setFixedHeight(60)
         form.addRow("Name:", self._name_in)
         form.addRow("Slot:", self._slot_in)
         form.addRow("Armor Value:", self._av_in)
         form.addRow("Armor Level:", self._lvl_in)
+        form.addRow("Inventory Slots (when carried):", self._slot_count_in)
         form.addRow("Description:", self._desc_in)
         form_outer.addLayout(form)
 
@@ -357,6 +366,7 @@ class ArmorListTab(QWidget):
         self._slot_in.setCurrentIndex(idx)
         self._av_in.setValue(a.armor_value)
         self._lvl_in.setValue(a.armor_level)
+        self._slot_count_in.setValue(getattr(a, "slot_count", 1))
         self._desc_in.setPlainText(a.description)
         self._passive_editor.load(a.passives)
 
@@ -370,6 +380,7 @@ class ArmorListTab(QWidget):
         a.slot = self._slot_in.currentText()
         a.armor_value = self._av_in.value()
         a.armor_level = self._lvl_in.value()
+        a.slot_count = self._slot_count_in.value()
         a.description = self._desc_in.toPlainText()
         self._state.log_event("armor_edited", f"Edited armor '{a.name}'", category="change")
         self._state.lists_changed.emit()
@@ -448,10 +459,12 @@ class _SpellEffectRow(QFrame):
             self._duration_in.addItem(f"For {n} turns", f"turns:{n}")
         self._duration_in.addItem("Permanent", "permanent")
         row2.addWidget(self._duration_in)
-        self._prof_chk = QCheckBox("× Arcana proficiency")
-        self._throw_chk = QCheckBox("× Arcana throw / 10")
-        row2.addWidget(self._prof_chk)
-        row2.addWidget(self._throw_chk)
+        # v3.4: single "Arcana scaling" toggle replaces the prof+throw pair.
+        self._scale_chk = QCheckBox("Arcana scaling")
+        self._scale_chk.setToolTip(
+            "When checked, the amount is scaled by the caster's arcana throw "
+            "(/10) AND their arcana proficiency.")
+        row2.addWidget(self._scale_chk)
         row2.addStretch(1)
         self._rm_btn = QPushButton("Remove effect")
         self._rm_btn.setProperty("role", "danger")
@@ -463,8 +476,7 @@ class _SpellEffectRow(QFrame):
         self._scope_in.currentIndexChanged.connect(self._commit)
         self._amount_in.valueChanged.connect(self._commit)
         self._duration_in.currentIndexChanged.connect(self._commit)
-        self._prof_chk.toggled.connect(self._commit)
-        self._throw_chk.toggled.connect(self._commit)
+        self._scale_chk.toggled.connect(self._commit)
 
     def _populate_targets(self, school: str) -> None:
         self._target_in.clear()
@@ -495,8 +507,7 @@ class _SpellEffectRow(QFrame):
             if self._duration_in.itemData(i) == self.effect.duration:
                 self._duration_in.setCurrentIndex(i)
                 break
-        self._prof_chk.setChecked(self.effect.affected_by_proficiency)
-        self._throw_chk.setChecked(self.effect.affected_by_throw)
+        self._scale_chk.setChecked(getattr(self.effect, "arcana_scaling", False))
         self._refresh_suffix()
 
     def _refresh_suffix(self) -> None:
@@ -508,8 +519,7 @@ class _SpellEffectRow(QFrame):
         self.effect.scope = self._scope_in.currentData() or "fixed"
         self.effect.amount = float(self._amount_in.value())
         self.effect.duration = self._duration_in.currentData() or "single"
-        self.effect.affected_by_proficiency = self._prof_chk.isChecked()
-        self.effect.affected_by_throw = self._throw_chk.isChecked()
+        self.effect.arcana_scaling = self._scale_chk.isChecked()
         self._refresh_suffix()
         self.changed.emit()
 

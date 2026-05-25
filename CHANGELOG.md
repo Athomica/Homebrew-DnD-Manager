@@ -1,5 +1,70 @@
 # DnD Manager Changelog
 
+## v3.4 — Multi-encounter, conflict layout fix, spell/form/equipment polish
+
+Schema bump `6 -> 7`. Old saves auto-migrate.
+
+### Multi-encounter
+- The Encounters tab now has a **tab strip** at the top, one tab per active
+  encounter, plus a **"+ New encounter"** button. Switch between encounters
+  freely; each runs through its own preparation -> combat -> resolution.
+- A unique character can only be in ONE encounter at a time across the
+  whole campaign. Trying to add an already-active unique character is
+  rejected with a message naming the encounter that's holding them.
+- `End Encounter` removes only that encounter from the list, then selects
+  another one if there are any. Other encounters keep their state.
+- Cross-encounter *interaction* (locking sources, spawning a 1v1
+  interaction encounter) is deferred again; the data model (encounter id,
+  `interaction_sources`, `is_locked_by`) is in place for v3.5.
+
+### Conflict resolution fixes
+- The Conflict Resolution panel was eating the middle column. The main row
+  now uses **equal-thirds** stretch (1 : 1 : 1) with no fixed min/max, and
+  the panel stacks the two sides vertically instead of side-by-side so the
+  text never clips.
+- Conflict Resolution **radios actually work now**. The old code reset the
+  radios from encounter state on every refresh, which clobbered the user's
+  click. Radios now mutate state directly; refresh only updates the
+  derived damage/cost numbers.
+- **"Use item"** removed from the action list. The inventory tab's
+  "Use item" button is also **disabled during a conflict**, so a player
+  can no longer drink a potion AND attack in the same round.
+
+### Spells
+- **Conjuration** and **Illusion** schools removed. Three schools remain:
+  Destruction, Alteration, Restoration. Spells with the removed schools
+  are migrated to Destruction on load.
+- The two effect toggles ("× Arcana proficiency" and "× Arcana throw / 10")
+  are merged into a single **"Arcana scaling"** checkbox. When on, the
+  amount is scaled by (throw / 10) × (1 + arcana_sp / 100).
+- **Arcana level requirement** is now enforced: a character can only see /
+  equip / cast a spell whose `arcana_level <= character.arcana_sp`. The
+  Add-spell dropdown and the staff spell-slot dropdowns both filter.
+
+### Forms
+- Form multipliers now display as **percentages** (100 % = no change).
+  Both "120 %" and "1.2" parse on input.
+- Forms gained **HP %**, **Stamina %**, **Mana %** columns. The vital
+  multipliers are applied via `Character.vital_max_with_form(...)`.
+
+### Equipment
+- **Weapons and Armor** now have a `slot_count` field, like Items. Carried
+  equipment takes that many inventory slots; **equipped equipment takes
+  zero**. `InventoryEntry.armor_id` was added so armor can also sit in the
+  inventory.
+
+### Realtime refresh
+- The compact character card listens to **character_changed** and
+  **lists_changed** in addition to encounter_changed. Fall-damage labels,
+  spell list dropdowns, and equipment swaps all update without re-entering
+  the encounter or reloading the save.
+
+### Misc
+- Latent: `GlobalCharacterListTab` view-toggle button is now actually
+  wired (was unwired prior to v3.2 due to a dead-code bug).
+
+---
+
 ## v3.3 — Action-based conflict, spell effect system, inventory in combat
 
 Schema bump: `5 -> 6`. Old saves auto-migrate (legacy `spell.damage` becomes
