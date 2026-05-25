@@ -639,8 +639,23 @@ class StateManager(QObject):
                        old_value=old, new_value=character.health_current)
         self.character_changed.emit(character.id)
 
-    def set_active_form(self, character: Character, form_id: Optional[str]) -> None:
+    # v3.4.5: shapeshifting always costs 100 mana, per user spec.
+    SHAPESHIFT_MANA_COST = 100
+
+    def set_active_form(self, character: Character, form_id: Optional[str],
+                          pay_mana: bool = True) -> tuple[bool, str]:
+        """v3.4.5: changing form costs 100 mana. Returns (ok, message).
+        Pass pay_mana=False to skip the mana check/deduction (used when
+        applying state at load time, or for the initial form selection)."""
         old = character.active_form_id
+        # No mana cost if we're already in this form, or if we're un-shifting
+        # (back to (none)).
+        if pay_mana and form_id and form_id != old:
+            if character.mana_current < self.SHAPESHIFT_MANA_COST:
+                return False, (
+                    f"Not enough mana to shapeshift "
+                    f"({character.mana_current} / {self.SHAPESHIFT_MANA_COST}).")
+            character.mana_current -= self.SHAPESHIFT_MANA_COST
         character.active_form_id = form_id
         name = "(none)"
         if form_id:
@@ -652,15 +667,10 @@ class StateManager(QObject):
                        character_id=character.id,
                        old_value=old, new_value=form_id)
         self.character_changed.emit(character.id)
+        return True, f"Now in '{name}'."
 
     def enter_form(self, character: Character, form: Form) -> tuple[bool, str]:
-        cost = int(form.mana_to_enter)
-        if cost > 0 and character.mana_current < cost:
-            return False, f"Not enough mana to enter {form.name}"
-        if cost > 0:
-            character.mana_current -= cost
-        self.set_active_form(character, form.id)
-        return True, f"Entered {form.name}"
+        return self.set_active_form(character, form.id)
 
     # -- Section collapse persistence ----------------------------------
     def set_section_collapsed(self, character: Character, section: str, collapsed: bool) -> None:
@@ -1384,6 +1394,14 @@ class StateManager(QObject):
             ("left", left, enc.left_action, right.character),
             ("right", right, enc.right_action, left.character),
         ):
+            if action == "shift":
+                # v3.4.5: applying a queued form change as the side's action.
+                fid = (enc.left_pending_form_id if side == "left"
+                       else enc.right_pending_form_id)
+                ok, sub_msg = self.set_active_form(inst.character, fid,
+                                                     pay_mana=True)
+                msgs.append(sub_msg)
+                continue
             if action == "cast":
                 spell = self._equipped_spell(inst.character)
                 if spell is None and inst.character.can_cast_without_staff:
@@ -1435,6 +1453,8 @@ class StateManager(QObject):
         enc.right_apply_fall = False
         enc.left_pending_item_id = None
         enc.right_pending_item_id = None
+        enc.left_pending_form_id = None
+        enc.right_pending_form_id = None
         msg = "Conflict resolved. " + " ".join(msgs) if msgs else "Conflict resolved."
         self.log_event("conflict_resolved", msg, category="combat")
         self.encounter_changed.emit()

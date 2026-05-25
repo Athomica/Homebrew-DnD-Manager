@@ -469,6 +469,11 @@ class Encounter:
     left_use_shield: bool = True
     right_use_shield: bool = True
 
+    # v3.4.5: when a side picks the 'shift' action, this is the form id they
+    # are switching INTO. Applied at resolve time and costs 100 mana.
+    left_pending_form_id: Optional[str] = None
+    right_pending_form_id: Optional[str] = None
+
     # v3.3/v3.4: Each side picks ONE action per conflict. One of:
     #   'attack', 'block', 'cast', 'dodge'
     # (v3.4: 'use_item' was removed — items can only be used between

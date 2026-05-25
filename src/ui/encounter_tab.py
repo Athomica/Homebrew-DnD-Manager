@@ -579,14 +579,31 @@ class CompactCharacterCard(QFrame):
         self._tabs.addTab(tab, "Forms")
 
     def _on_active_form_changed(self, _i: int) -> None:
-        # v3.4.1: defer the state mutation until after the combo's popup has
-        # had a chance to close. Mutating the combo during the popup's
-        # activation handler (via the subsequent _refresh that clears+refills
-        # the combo) caused a hard crash on some Qt builds.
         from PyQt6.QtCore import QTimer
         fid = self._form_combo.currentData()
-        QTimer.singleShot(
-            0, lambda: self._state.set_active_form(self._instance.character, fid))
+        enc = self._state.state.active_encounter
+        in_conflict = enc is not None and enc.in_conflict_mode
+        if in_conflict:
+            # v3.4.5: changing form during a conflict is the "Shift" action,
+            # not a free dropdown change. Tell the user to use the action.
+            char = self._instance.character
+            QTimer.singleShot(0, lambda: QMessageBox.information(
+                self, "Shift in conflict",
+                "Changing form during a conflict is an action. Pick the "
+                "'Shift' action in the Conflict Resolution panel and "
+                "select the target form there. The shift will apply on "
+                "resolve and cost 100 mana."))
+            # Revert combo to whatever the character currently shows.
+            self._refresh_forms()
+            return
+
+        def _do_change():
+            ok, msg = self._state.set_active_form(self._instance.character, fid)
+            if not ok:
+                QMessageBox.warning(self, "Shapeshift", msg)
+                # Revert combo to actual current form.
+                self._refresh_forms()
+        QTimer.singleShot(0, _do_change)
 
     def _on_add_form(self) -> None:
         from models import Form
@@ -848,7 +865,7 @@ class CompactCharacterCard(QFrame):
 # ---------------------------------------------------------------------------
 
 ACTIONS = (("attack", "Attack"), ("block", "Block"), ("cast", "Cast"),
-            ("dodge", "Dodge"))
+            ("dodge", "Dodge"), ("shift", "Shift"))
 
 
 class ConflictPanel(QGroupBox):
@@ -964,6 +981,19 @@ class ConflictPanel(QGroupBox):
         shield_l.addStretch(1)
         layout.addWidget(shield_box)
 
+        # v3.4.5: Shift sub-option — pick which form to switch into.
+        shift_box = QFrame()
+        shift_l = QHBoxLayout(shift_box); shift_l.setContentsMargins(16, 0, 0, 0)
+        shift_l.addWidget(QLabel("Shift to:"))
+        form_combo = NoWheelComboBox()
+        form_combo.currentIndexChanged.connect(
+            self._on_shift_form_factory(side, form_combo))
+        shift_l.addWidget(form_combo, 1)
+        shift_cost_lbl = QLabel("(100 mana)")
+        shift_cost_lbl.setProperty("role", "dim")
+        shift_l.addWidget(shift_cost_lbl)
+        layout.addWidget(shift_box)
+
         # Outcome labels (always shown, smaller text so they fit a 1/3 column)
         dmg_dealt = QLabel("Damage dealt:   -")
         dmg_dealt.setStyleSheet("color: #44af69; font-weight: bold;")
@@ -982,9 +1012,22 @@ class ConflictPanel(QGroupBox):
             "action_radios": action_radios, "atk_radios": atk_radios,
             "atk_box": atk_box,
             "shield_box": shield_box, "use_shield_chk": use_shield_chk,
+            "shift_box": shift_box, "form_combo": form_combo,
             "dmg_dealt": dmg_dealt, "dmg_recv": dmg_recv,
             "stam_cost": stam_cost, "mana_cost": mana_cost,
         }
+
+    def _on_shift_form_factory(self, side: str, combo: NoWheelComboBox):
+        def handler(_idx: int) -> None:
+            enc = self._state.state.active_encounter
+            if enc is None:
+                return
+            fid = combo.currentData()
+            if side == "left":
+                enc.left_pending_form_id = fid
+            else:
+                enc.right_pending_form_id = fid
+        return handler
 
     def _on_use_shield_factory(self, side: str):
         def handler(checked: bool) -> None:
@@ -1063,6 +1106,23 @@ class ConflictPanel(QGroupBox):
             col["atk_box"].setVisible(cur_action == "attack")
             # v3.4.4: show "Use shield" only when blocking.
             col["shield_box"].setVisible(cur_action == "block")
+            # v3.4.5: show form picker only when shifting.
+            col["shift_box"].setVisible(cur_action == "shift")
+            # Populate form combo with this character's forms.
+            form_combo = col["form_combo"]
+            pending = (enc.left_pending_form_id if side == "left"
+                       else enc.right_pending_form_id)
+            form_combo.blockSignals(True)
+            form_combo.clear()
+            form_combo.addItem("(none)", None)
+            for f in inst.character.forms:
+                form_combo.addItem(f.name, f.id)
+            if pending:
+                for i in range(form_combo.count()):
+                    if form_combo.itemData(i) == pending:
+                        form_combo.setCurrentIndex(i)
+                        break
+            form_combo.blockSignals(False)
             # Sync the use-shield checkbox to encounter state.
             use_shield = (enc.left_use_shield if side == "left"
                           else enc.right_use_shield)
@@ -1098,6 +1158,10 @@ class ConflictPanel(QGroupBox):
                 shield = inst.character.get_shield(self._state.state.weapons)
                 if shield and use_shield:
                     stam_cost = shield.block_cost
+            elif cur_action == "shift":
+                # v3.4.5: shapeshifting costs 100 mana flat.
+                from state import StateManager as _SM
+                mana_cost = _SM.SHAPESHIFT_MANA_COST
             col["dmg_dealt"].setText(f"Damage dealt:   {atk_val:.1f}")
             col["stam_cost"].setText(f"Stamina cost:   {stam_cost}")
             col["mana_cost"].setText(f"Mana cost:   {mana_cost}")

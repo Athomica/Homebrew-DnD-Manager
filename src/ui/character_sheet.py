@@ -1022,7 +1022,11 @@ class CharacterSheet(QWidget):
         if self._suspend:
             return
         fid = self._active_form_combo.currentData()
-        self._state.set_active_form(self._char, fid)
+        ok, msg = self._state.set_active_form(self._char, fid)
+        if not ok:
+            QMessageBox.warning(self, "Shapeshift", msg)
+            # Revert dropdown to actual current form.
+            self._refresh_forms()
         self._refresh_derived()
 
     def _on_enter_form(self) -> None:
@@ -1046,9 +1050,12 @@ class CharacterSheet(QWidget):
         fid = self._char.forms[row].id
         del self._char.forms[row]
         if self._char.active_form_id == fid:
+            # v3.4.5: don't charge mana for the auto-revert when a form is
+            # deleted out from under the character.
             self._state.set_active_form(
                 self._char,
                 self._char.forms[0].id if self._char.forms else None,
+                pay_mana=False,
             )
         self._refresh_forms()
         self._refresh_derived()

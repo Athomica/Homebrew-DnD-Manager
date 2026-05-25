@@ -1,5 +1,27 @@
 # DnD Manager Changelog
 
+## v3.4.5 — Shapeshift is an action; costs 100 mana
+
+- **Shapeshifting always costs 100 mana.** If you don't have it, a dialog
+  pops up saying so and the form change is rejected — both inside and
+  outside a conflict.
+- **Shapeshifting is now a conflict action.** The Conflict Resolution
+  panel grew a fifth action: **Shift**. When you select it, a "Shift
+  to:" dropdown appears (showing this character's forms). The form
+  change is queued and applied at resolve time, just like Cast — it
+  consumes the side's action for the round and the character is still
+  vulnerable to the opponent's hit.
+- The Forms tab's active-form dropdown is now read-only **during** a
+  conflict: trying to change form there pops a message directing you
+  to the Shift action and reverts the dropdown.
+- The combat-resolution previews include the shift mana cost so you
+  can see whether it'll even succeed before you commit.
+
+No schema bump: two new optional fields on Encounter
+(`left_pending_form_id`, `right_pending_form_id`) default to None.
+
+---
+
 ## v3.4.4 — "Damage received" reflects what you'll actually take
 
 - **"Damage received" in the conflict panel now shows the FINAL HP loss**
