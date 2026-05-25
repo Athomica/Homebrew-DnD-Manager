@@ -1,5 +1,38 @@
 # DnD Manager Changelog
 
+## v3.4.1 — Crash fixes & realtime refresh
+
+Bug-fix pass on top of v3.4. No schema change.
+
+- **Crash: switching primary/secondary during a conflict.** Root cause: the
+  swap helper emitted `encounter_changed`, which destroyed the compact
+  character card mid-click-handler — and the button you just clicked was
+  the destroyed widget. `swap_primary_secondary`, `set_equipment`, and
+  `equip_from_inventory` now emit only `character_changed`, so the card
+  refreshes in place instead of being rebuilt.
+- **Crash: changing form during a conflict.** Same family — the form
+  combo's activation handler triggered a `_refresh` that called `.clear()`
+  on the combo whose dropdown was still showing. Form changes are now
+  deferred via `QTimer.singleShot(0, ...)`, so the popup closes before the
+  state mutation that would refill the combo.
+- **Duplicate opponent card on dice entry.** Same family again —
+  `record_dice_for_instance` emitted `encounter_changed`, triggering a
+  full rebuild that double-added the card under specific signal timings.
+  Dice changes now use `character_changed` (in-place update), so no
+  rebuild and no duplicate.
+- **Spell list not real-time.** Adding a spell to a character via
+  `+ Add` in the character sheet now refreshes the staff-slot dropdowns
+  AND emits `character_changed`, so the encounter card's primary/secondary
+  spell pickers update without reloading. Removing a spell that was
+  slotted also clears the slot.
+- **Passive duration is now usable.** The "manual" placeholder is gone.
+  Duration dropdown offers: Single use / Manual (clear by hand) /
+  Permanent / **For N turns**, with an adjacent turn-count spinner that
+  appears only when "For N turns" is selected. Saved values use
+  `turns:N` and round-trip through the editor.
+
+---
+
 ## v3.4 — Multi-encounter, conflict layout fix, spell/form/equipment polish
 
 Schema bump `6 -> 7`. Old saves auto-migrate.

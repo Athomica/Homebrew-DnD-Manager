@@ -1102,7 +1102,10 @@ class StateManager(QObject):
         # Track last 4 dice rolls (most recent first)
         inst.dice_history.insert(0, dice)
         inst.dice_history = inst.dice_history[:4]
-        self.encounter_changed.emit()
+        # v3.4.1: emit character_changed (in-place update) instead of
+        # encounter_changed (which would rebuild the whole card tree and
+        # cause the duplicate-card bug and click-during-rebuild crashes).
+        self.character_changed.emit(inst.character.id)
 
     def _equipped_spell(self, character: Character):
         """Return the Spell currently slotted into the active weapon, or None."""
@@ -1161,7 +1164,8 @@ class StateManager(QObject):
         entry.weapon_id = prev_wid  # may be None — entry then becomes empty
         if entry.weapon_id is None and not entry.item_id and not entry.title:
             char.inventory.remove(entry)
-        self.encounter_changed.emit()
+        # v3.4.1: in-place — no encounter_changed (would rebuild the card and
+        # crash the click handler that just fired).
         self.character_changed.emit(char.id)
         return True, "ok"
 
@@ -1171,7 +1175,6 @@ class StateManager(QObject):
         if char is None:
             return
         char.using_primary = not char.using_primary
-        self.encounter_changed.emit()
         self.character_changed.emit(char.id)
 
     def set_equipment(self, instance_id: str, slot: str,
@@ -1197,7 +1200,6 @@ class StateManager(QObject):
         if slot not in attr_map:
             return
         setattr(char, attr_map[slot], value)
-        self.encounter_changed.emit()
         self.character_changed.emit(char.id)
 
     # -- v3.3: spell effect application --------------------------------

@@ -560,8 +560,14 @@ class CompactCharacterCard(QFrame):
         self._tabs.addTab(tab, "Forms")
 
     def _on_active_form_changed(self, _i: int) -> None:
+        # v3.4.1: defer the state mutation until after the combo's popup has
+        # had a chance to close. Mutating the combo during the popup's
+        # activation handler (via the subsequent _refresh that clears+refills
+        # the combo) caused a hard crash on some Qt builds.
+        from PyQt6.QtCore import QTimer
         fid = self._form_combo.currentData()
-        self._state.set_active_form(self._instance.character, fid)
+        QTimer.singleShot(
+            0, lambda: self._state.set_active_form(self._instance.character, fid))
 
     def _on_add_form(self) -> None:
         from models import Form

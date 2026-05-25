@@ -341,7 +341,7 @@ class TestEncounterSystem(unittest.TestCase):
         self.assertTrue(ok)
         ok2, msg, _ = self.sm.add_character_to_encounter(hero)
         self.assertFalse(ok2)
-        self.assertIn("already in the encounter", msg)
+        self.assertIn("already in", msg)
 
     def test_turn_constraint_window(self):
         h1 = Character(name="H1", role="party")

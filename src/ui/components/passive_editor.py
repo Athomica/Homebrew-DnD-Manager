@@ -10,11 +10,16 @@ from PyQt6.QtWidgets import (
 
 from models import Passive, passive_affected_options
 from ui.components.no_wheel_combo import (
-    NoWheelComboBox, NoWheelDoubleSpinBox,
+    NoWheelComboBox, NoWheelDoubleSpinBox, NoWheelSpinBox,
 )
 
 
-DURATIONS = ("permanent", "manual")
+_DURATION_OPTIONS = (
+    ("Single use", "single"),
+    ("Manual (clear by hand)", "manual"),
+    ("Permanent", "permanent"),
+    # The "turns:N" form is built dynamically based on the turn-count spinner.
+)
 
 
 def build_affected_combo() -> NoWheelComboBox:
@@ -70,8 +75,18 @@ class PassiveListEditor(QWidget):
         self._scope.addItem("percent", "percent")
         self._scope.currentIndexChanged.connect(self._refresh_amount_suffix)
         self._affected = build_affected_combo()
+        # v3.4.1: duration is "single" / "manual" / "permanent" / "turns:N".
+        # The "For N turns" option uses the adjacent spin box for N.
         self._duration = NoWheelComboBox()
-        self._duration.addItems(DURATIONS)
+        for label, value in _DURATION_OPTIONS:
+            self._duration.addItem(label, value)
+        self._duration.addItem("For N turns", "turns")
+        self._duration.currentIndexChanged.connect(self._refresh_turns_visibility)
+        self._duration_turns = NoWheelSpinBox()
+        self._duration_turns.setRange(1, 999)
+        self._duration_turns.setValue(3)
+        self._duration_turns.setSuffix(" turns")
+        self._duration_turns.setVisible(False)
         self._active = QCheckBox("active")
         self._active.setChecked(True)
         edit_row.addWidget(QLabel("Name:"))
@@ -83,6 +98,7 @@ class PassiveListEditor(QWidget):
         edit_row.addWidget(self._affected, 1)
         edit_row.addWidget(QLabel("Dur:"))
         edit_row.addWidget(self._duration)
+        edit_row.addWidget(self._duration_turns)
         edit_row.addWidget(self._active)
         outer.addLayout(edit_row)
         self._refresh_amount_suffix()
@@ -111,6 +127,39 @@ class PassiveListEditor(QWidget):
     def _refresh_amount_suffix(self) -> None:
         scope = self._scope.currentData()
         self._amount.setSuffix(" %" if scope == "percent" else "")
+
+    def _refresh_turns_visibility(self) -> None:
+        self._duration_turns.setVisible(self._duration.currentData() == "turns")
+
+    def _duration_value(self) -> str:
+        kind = self._duration.currentData()
+        if kind == "turns":
+            return f"turns:{self._duration_turns.value()}"
+        return kind or "permanent"
+
+    def _set_duration_from_string(self, s: str) -> None:
+        if s.startswith("turns:"):
+            try:
+                n = int(s.split(":", 1)[1])
+            except ValueError:
+                n = 3
+            self._duration_turns.setValue(n)
+            for i in range(self._duration.count()):
+                if self._duration.itemData(i) == "turns":
+                    self._duration.setCurrentIndex(i)
+                    break
+        else:
+            for i in range(self._duration.count()):
+                if self._duration.itemData(i) == s:
+                    self._duration.setCurrentIndex(i)
+                    break
+            else:
+                # Unknown legacy value — default to permanent.
+                for i in range(self._duration.count()):
+                    if self._duration.itemData(i) == "permanent":
+                        self._duration.setCurrentIndex(i)
+                        break
+        self._refresh_turns_visibility()
 
     def _refresh_list(self) -> None:
         self._list.clear()
@@ -144,8 +193,7 @@ class PassiveListEditor(QWidget):
         self._scope.setCurrentIndex(0 if scope == "fixed" else 1)
         self._refresh_amount_suffix()
         self._select_affected(p.affected_value)
-        idx = DURATIONS.index(p.duration) if p.duration in DURATIONS else 0
-        self._duration.setCurrentIndex(idx)
+        self._set_duration_from_string(p.duration or "permanent")
         self._active.setChecked(p.active)
 
     def _on_add(self) -> None:
@@ -153,7 +201,7 @@ class PassiveListEditor(QWidget):
                     amount=self._amount.value(),
                     scope=self._scope.currentData() or "fixed",
                     affected_value=self._current_affected_text(),
-                    duration=self._duration.currentText(),
+                    duration=self._duration_value(),
                     source=self._source_default,
                     active=self._active.isChecked())
         self._passives.append(p)
@@ -178,7 +226,7 @@ class PassiveListEditor(QWidget):
         p.amount = self._amount.value()
         p.scope = self._scope.currentData() or "fixed"
         p.affected_value = self._current_affected_text()
-        p.duration = self._duration.currentText()
+        p.duration = self._duration_value()
         p.active = self._active.isChecked()
         self._refresh_list()
         self._list.setCurrentRow(row)

@@ -789,6 +789,9 @@ class CharacterSheet(QWidget):
         if sid and sid not in self._char.spell_ids:
             self._char.spell_ids.append(sid)
             self._refresh_spell_list()
+            # v3.4.1: refresh staff-slot combos and notify the encounter card.
+            self._refresh_lookup_dropdowns()
+            self._state.character_changed.emit(self._char.id)
 
     def _on_remove_spell(self) -> None:
         item = self._spell_list.currentItem()
@@ -797,7 +800,14 @@ class CharacterSheet(QWidget):
         sid = item.data(Qt.ItemDataRole.UserRole)
         if sid in self._char.spell_ids:
             self._char.spell_ids.remove(sid)
+            # Clear the staff slot if it was holding this spell.
+            if self._char.primary_spell_id == sid:
+                self._char.primary_spell_id = None
+            if self._char.secondary_spell_id == sid:
+                self._char.secondary_spell_id = None
             self._refresh_spell_list()
+            self._refresh_lookup_dropdowns()
+            self._state.character_changed.emit(self._char.id)
 
     def _on_cast_spell(self) -> None:
         item = self._spell_list.currentItem()
