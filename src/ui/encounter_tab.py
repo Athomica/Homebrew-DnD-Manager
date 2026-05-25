@@ -1811,6 +1811,44 @@ class EncounterTab(QWidget):
         v.addStretch(1)
         return wrap
 
+    def _build_deceased_pile(self, side: str, enc) -> Optional[QWidget]:
+        """v3.6: render the side's deceased pile as a small dim drawer
+        below the active participant card. Returns None when nobody on
+        this side has died yet, so the layout stays tight in normal play."""
+        ids = (enc.left_deceased_ids if side == "left"
+                else enc.right_deceased_ids)
+        if not ids:
+            return None
+        wrap = QFrame()
+        wrap.setStyleSheet(
+            "QFrame { background-color: #1a1010; border: 1px solid #3a1a1a; "
+            "border-radius: 4px; }")
+        v = QVBoxLayout(wrap)
+        v.setContentsMargins(6, 4, 6, 4); v.setSpacing(4)
+        header = QLabel(f"💀  Deceased ({len(ids)})")
+        header.setStyleSheet(
+            "color: #b06060; font-weight: bold; padding: 2px;")
+        v.addWidget(header)
+        row_w = QWidget()
+        row = QHBoxLayout(row_w)
+        row.setContentsMargins(0, 0, 0, 0); row.setSpacing(4)
+        for iid in ids:
+            inst = self._state.get_instance(iid)
+            if inst is None or inst.character is None:
+                continue
+            chip = QLabel(f"💀 {inst.character.name}")
+            chip.setStyleSheet(
+                "color: #7a5a5a; background-color: #261515; "
+                "padding: 3px 8px; border-radius: 3px; "
+                "text-decoration: line-through;")
+            chip.setToolTip(
+                "Killed in this encounter. Will be archived as deceased "
+                "when the encounter ends.")
+            row.addWidget(chip)
+        row.addStretch(1)
+        v.addWidget(row_w)
+        return wrap
+
     def refresh(self) -> None:
         # v3.4.6: rebuild the encounter tab strip first.
         self._rebuild_enc_tab_bar()
@@ -1870,7 +1908,15 @@ class EncounterTab(QWidget):
             self._left_inner.addWidget(card, 1)
         else:
             self._left_empty.setVisible(True)
-            self._left_empty.setText("\n(left side has no active participant)\n")
+            wiped = bool(enc.left_deceased_ids)
+            self._left_empty.setText(
+                "\n💀  Left side wiped out.\n" if wiped
+                else "\n(left side has no active participant)\n")
+        # v3.6: deceased pile drawer below the active card.
+        l_pile = self._build_deceased_pile("left", enc)
+        if l_pile is not None:
+            self._left_inner.addWidget(l_pile)
+
         r_inst = self._state.active_instance("right")
         if r_inst is not None and r_inst.character is not None:
             self._right_empty.setVisible(False)
@@ -1881,7 +1927,13 @@ class EncounterTab(QWidget):
             self._right_inner.addWidget(card, 1)
         else:
             self._right_empty.setVisible(True)
-            self._right_empty.setText("\n(right side has no active participant)\n")
+            wiped = bool(enc.right_deceased_ids)
+            self._right_empty.setText(
+                "\n💀  Right side wiped out.\n" if wiped
+                else "\n(right side has no active participant)\n")
+        r_pile = self._build_deceased_pile("right", enc)
+        if r_pile is not None:
+            self._right_inner.addWidget(r_pile)
         self._conflict_btn.setVisible(True)
         if enc.in_conflict_mode and l_inst and r_inst:
             panel = ConflictPanel(self._state)

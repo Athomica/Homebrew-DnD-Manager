@@ -163,6 +163,9 @@ def _migrate_4_to_5(d: dict) -> dict:
     if ae is not None:
         ae.setdefault("left_participant_ids", [])
         ae.setdefault("right_participant_ids", [])
+        # v3.6: deceased pile (per side) — see Encounter docstring.
+        ae.setdefault("left_deceased_ids", [])
+        ae.setdefault("right_deceased_ids", [])
         ae.setdefault("left_active_idx", 0)
         ae.setdefault("right_active_idx", 0)
         ae.setdefault("is_started", False)
@@ -1446,6 +1449,13 @@ class StateManager(QObject):
                 self.apply_hp_loss(inst.character, cb["fall_damage"])
                 msgs.append(f"{inst.character.name} fell (-{cb['fall_damage']:.1f} HP)")
 
+        # v3.6: pile any participant whose HP reached 0 onto their side's
+        # deceased pile. They stop cycling as the active fighter, get marked
+        # is_deceased (so end_encounter propagates the flag to the source
+        # character), and a log message records the death.
+        for _side in ("left", "right"):
+            self._pile_deceased(enc, _side, msgs)
+
         enc.in_conflict_mode = False
         enc.items_used_left = []
         enc.items_used_right = []
@@ -1459,6 +1469,35 @@ class StateManager(QObject):
         self.log_event("conflict_resolved", msg, category="combat")
         self.encounter_changed.emit()
         return msg
+
+    def _pile_deceased(self, enc, side: str, msgs: list) -> None:
+        """v3.6: move 0-HP participants on `side` to that side's deceased
+        pile and mark them is_deceased. Idempotent: safe to call repeatedly.
+        Clamps the side's active index so cycle arrows still point at a
+        living participant (or 0 if everyone's down)."""
+        part_attr = f"{side}_participant_ids"
+        dead_attr = f"{side}_deceased_ids"
+        idx_attr = f"{side}_active_idx"
+        survivors: list[str] = []
+        deceased: list[str] = list(getattr(enc, dead_attr))
+        for iid in getattr(enc, part_attr):
+            inst = next((i for i in enc.instances if i.instance_id == iid), None)
+            if inst is None:
+                continue
+            if inst.character.health_current <= 0:
+                inst.character.health_current = 0
+                if not inst.character.is_deceased:
+                    inst.character.is_deceased = True
+                if iid not in deceased:
+                    deceased.append(iid)
+                msgs.append(f"{inst.character.name} died.")
+            else:
+                survivors.append(iid)
+        setattr(enc, part_attr, survivors)
+        setattr(enc, dead_attr, deceased)
+        cur = getattr(enc, idx_attr)
+        setattr(enc, idx_attr,
+                max(0, min(cur, len(survivors) - 1)) if survivors else 0)
 
     def _atk_value_for_selection(self, character: Character, selection: str) -> float:
         cb = me.derive_combat_view(character, self.state.weapons,

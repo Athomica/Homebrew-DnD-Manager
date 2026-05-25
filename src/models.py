@@ -443,6 +443,14 @@ class Encounter:
     # show one currently-selected participant each (controlled by *_active_idx).
     left_participant_ids: list[str] = field(default_factory=list)
     right_participant_ids: list[str] = field(default_factory=list)
+    # v3.6: when a participant's HP reaches 0 after a conflict, their
+    # instance_id is moved off the participant list onto the deceased
+    # pile for that side. They remain in `instances` (so the data isn't
+    # lost) but no longer cycle in/out as the active fighter. Deceased
+    # status is committed back to the source character at end_encounter
+    # via the usual field-copy.
+    left_deceased_ids: list[str] = field(default_factory=list)
+    right_deceased_ids: list[str] = field(default_factory=list)
     left_active_idx: int = 0
     right_active_idx: int = 0
     is_started: bool = False

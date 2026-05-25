@@ -1,5 +1,29 @@
 # DnD Manager Changelog
 
+## v3.6 — Deceased pile
+
+When a character's HP reaches 0 at the end of a conflict, they no longer
+just sit there at 0 HP pretending nothing happened. Now:
+
+- They're marked **deceased** (`is_deceased = True`).
+- They're moved to a **per-side deceased pile**, shown as a dim red
+  drawer (`💀 Deceased (N)`) beneath the active participant card, with
+  one strike-through chip per dead character.
+- The cycle arrows no longer cycle through them — only living
+  participants stay in rotation.
+- If every participant on a side is dead, the side panel shows
+  `💀  Left side wiped out.` (or right) and **Enter Conflict** is
+  disabled until a survivor remains on each side.
+- When the encounter ends, the deceased flag is committed back to the
+  source character in the global list (unchanged behavior — the existing
+  end_encounter field-copy picks it up). Template-instance kills are
+  discarded as before; no new "deceased unique" is created.
+
+Schema unchanged on disk (the two new lists default to empty), so old
+saves load cleanly.
+
+---
+
 ## v3.5 — Encounter UX streamline
 
 No mechanical changes. Everything works the same; the encounter tab is
