@@ -33,7 +33,7 @@ from ui.components.scaling_modifiers import ScalingModifiersPanel
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("DnD Manager v3.1")
+        self.setWindowTitle("DnD Manager v3.2")
         self.resize(1400, 900)
         self.setMinimumSize(900, 700)
 
@@ -72,7 +72,7 @@ class MainWindow(QMainWindow):
         self._log_tab = CombatLogTab(self._state)
         self._tabs.addTab(self._gcl_tab, "Global Character List")
         self._tabs.addTab(self._enc_tab, "Encounters")
-        self._tabs.addTab(self._lists_tab, "Global Lists")
+        self._tabs.addTab(self._lists_tab, "Equipment List")
         self._tabs.addTab(self._log_tab, "Combat && Change Log")
 
         # Scaling modifiers dock (developer view)
@@ -289,7 +289,7 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         QMessageBox.about(
             self, "About DnD Manager",
-            "DnD Manager v3.1\n\n"
+            "DnD Manager v3.2\n\n"
             "A solo Dungeon Master's tool for a homebrew dark-fantasy TTRPG.\n\n"
             "Targets KDE Plasma on Wayland (X11 fallback) on Linux.\n"
             "No dice rolling, no networking, no AI."

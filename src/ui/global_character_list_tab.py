@@ -71,6 +71,7 @@ class CharacterListSubTab(QWidget):
         self._role = role
         self._current_id: str | None = None
         self._sheet: CharacterSheet | None = None
+        self._search: str = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
@@ -96,6 +97,18 @@ class CharacterListSubTab(QWidget):
         toolbar.addWidget(self._rm_btn)
         toolbar.addStretch(1)
         outer.addLayout(toolbar)
+
+        # Search bar
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+        search_row.addWidget(QLabel("Search:"))
+        from PyQt6.QtWidgets import QLineEdit
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("name…")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.textChanged.connect(self._on_search)
+        search_row.addWidget(self._search_edit, 1)
+        outer.addLayout(search_row)
 
         # Split: list | sheet
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -176,11 +189,26 @@ class CharacterListSubTab(QWidget):
         # Restore selection without re-creating the sheet
         self._current_id = cur
 
+    def _on_search(self, text: str) -> None:
+        self._search = text.strip().lower()
+        cur = self._current_id
+        self._list.blockSignals(True)
+        self._populate_list()
+        self._list.blockSignals(False)
+        self._current_id = cur
+
+    def _matches_search(self, c: Character) -> bool:
+        if not self._search:
+            return True
+        return self._search in c.name.lower()
+
     def _populate_list(self) -> None:
         self._list.clear()
         active: list[Character] = []
         archived: list[Character] = []
         for c in self._chars():
+            if not self._matches_search(c):
+                continue
             (archived if c.is_deceased else active).append(c)
         for c in active:
             item = QListWidgetItem(self._label_for(c))
@@ -271,6 +299,7 @@ class GlobalCharacterListTab(QWidget):
 
     def __init__(self, state: StateManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._state = state
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(8)
@@ -297,6 +326,9 @@ class GlobalCharacterListTab(QWidget):
         tabs.addTab(self._npc_sub, "NPCs")
         outer.addWidget(tabs)
 
+        self._state.view_mode_changed.connect(self._refresh_view_btn)
+        self._refresh_view_btn()
+
     def tear_down_detail_sheets(self) -> None:
         """Called by the main window before a state swap (e.g. File > New) so
         no stale CharacterSheet receives a signal about state it doesn't own."""
@@ -305,10 +337,6 @@ class GlobalCharacterListTab(QWidget):
                 sub.tear_down_detail_sheet()
             except Exception:
                 pass
-
-        self._state = state
-        self._state.view_mode_changed.connect(self._refresh_view_btn)
-        self._refresh_view_btn()
 
     def _refresh_view_btn(self) -> None:
         is_dev = self._state.state.developer_view

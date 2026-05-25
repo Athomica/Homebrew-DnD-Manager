@@ -1,19 +1,39 @@
-"""Global Lists tab: Weapons & Shields, Armor, Spells, Items."""
+"""Equipment List tab (v3.2): Weapons & Shields, Armor, Spells, Items.
+
+v3.2 changes:
+- Each sub-tab has a search bar that filters its list live.
+- Weapons get an "is staff/wand" checkbox and a mana_cost field.
+- Spells get stamina_cost and damage fields.
+- Items get stamina_cost, mana_cost, hp/stamina/mana effect fields.
+- Container tab was renamed from "Global Lists" to "Equipment List".
+"""
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget, QListWidgetItem,
     QTabWidget, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
     QPlainTextEdit, QFormLayout, QGroupBox, QSplitter, QCheckBox,
-    QMessageBox, QButtonGroup, QRadioButton,
+    QButtonGroup, QRadioButton,
 )
 
 from state import StateManager
-from models import Weapon, Armor, Spell, Item, ARMOR_SLOTS, Passive
+from models import ARMOR_SLOTS
 from ui.components.passive_editor import PassiveListEditor
+
+
+def _make_search_row(placeholder: str, on_text_changed) -> QHBoxLayout:
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    row.addWidget(QLabel("Search:"))
+    edit = QLineEdit()
+    edit.setPlaceholderText(placeholder)
+    edit.setClearButtonEnabled(True)
+    edit.textChanged.connect(on_text_changed)
+    row.addWidget(edit, 1)
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -25,34 +45,27 @@ class WeaponsListTab(QWidget):
         super().__init__(parent)
         self._state = state
         self._current_id: Optional[str] = None
-        self._filter: str = "all"  # "all" | "weapon" | "shield"
+        self._filter: str = "all"  # "all" | "weapon" | "shield" | "staff"
+        self._search: str = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
 
-        # Top toolbar
         toolbar = QHBoxLayout()
-        add_w = QPushButton("+ Weapon")
-        add_w.setProperty("role", "primary")
-        add_s = QPushButton("+ Shield")
-        add_s.setProperty("role", "primary")
+        add_w = QPushButton("+ Weapon"); add_w.setProperty("role", "primary")
+        add_s = QPushButton("+ Shield"); add_s.setProperty("role", "primary")
         dup = QPushButton("Duplicate")
-        rm = QPushButton("- Remove")
-        rm.setProperty("role", "danger")
+        rm = QPushButton("- Remove"); rm.setProperty("role", "danger")
         add_w.clicked.connect(lambda: self._on_add(is_shield=False))
         add_s.clicked.connect(lambda: self._on_add(is_shield=True))
         dup.clicked.connect(self._on_duplicate)
         rm.clicked.connect(self._on_remove)
-
-        toolbar.addWidget(add_w)
-        toolbar.addWidget(add_s)
-        toolbar.addWidget(dup)
-        toolbar.addWidget(rm)
+        toolbar.addWidget(add_w); toolbar.addWidget(add_s)
+        toolbar.addWidget(dup); toolbar.addWidget(rm)
         toolbar.addSpacing(20)
 
-        # Filter
         bg = QButtonGroup(self)
-        for name in ("All", "Weapons only", "Shields only"):
+        for name in ("All", "Weapons only", "Shields only", "Staves only"):
             rb = QRadioButton(name)
             bg.addButton(rb)
             toolbar.addWidget(rb)
@@ -62,6 +75,8 @@ class WeaponsListTab(QWidget):
         toolbar.addStretch(1)
         outer.addLayout(toolbar)
 
+        outer.addLayout(_make_search_row("name…", self._on_search))
+
         split = QSplitter(Qt.Orientation.Horizontal)
         outer.addWidget(split, 1)
 
@@ -70,14 +85,15 @@ class WeaponsListTab(QWidget):
         self._list.currentRowChanged.connect(self._on_select)
         split.addWidget(self._list)
 
-        # Detail form
         detail = QWidget()
         form_outer = QVBoxLayout(detail)
         form = QFormLayout()
         self._name_in = QLineEdit()
         self._stamina_in = QSpinBox(); self._stamina_in.setRange(0, 9999)
+        self._mana_in = QSpinBox(); self._mana_in.setRange(0, 9999)
         self._damage_in = QSpinBox(); self._damage_in.setRange(0, 9999)
         self._is_shield_in = QCheckBox("Is shield (UI emphasis)")
+        self._is_staff_in = QCheckBox("Is staff / wand (allows magic use)")
         self._block_in = QSpinBox(); self._block_in.setRange(0, 9999)
         self._max_def_in = QSpinBox(); self._max_def_in.setRange(0, 99999)
         self._dmg_neg_in = QDoubleSpinBox(); self._dmg_neg_in.setRange(0, 1.0); self._dmg_neg_in.setSingleStep(0.05)
@@ -86,8 +102,10 @@ class WeaponsListTab(QWidget):
 
         form.addRow("Name:", self._name_in)
         form.addRow("Stamina Cost:", self._stamina_in)
+        form.addRow("Mana Cost:", self._mana_in)
         form.addRow("Damage:", self._damage_in)
         form.addRow("", self._is_shield_in)
+        form.addRow("", self._is_staff_in)
         form.addRow("Block Cost:", self._block_in)
         form.addRow("Max Defense:", self._max_def_in)
         form.addRow("Damage Negation (0..1):", self._dmg_neg_in)
@@ -101,15 +119,13 @@ class WeaponsListTab(QWidget):
         pgrp_l.addWidget(self._passive_editor)
         form_outer.addWidget(pgrp)
 
-        apply_btn = QPushButton("Apply")
-        apply_btn.setProperty("role", "primary")
+        apply_btn = QPushButton("Apply"); apply_btn.setProperty("role", "primary")
         apply_btn.clicked.connect(self._on_apply)
         form_outer.addWidget(apply_btn)
         form_outer.addStretch(1)
 
         split.addWidget(detail)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 3)
+        split.setStretchFactor(0, 1); split.setStretchFactor(1, 3)
 
         self._state.lists_changed.connect(self.refresh_list)
         self.refresh_list()
@@ -118,10 +134,19 @@ class WeaponsListTab(QWidget):
         sender = self.sender()
         if sender and sender.isChecked():
             text = sender.text()
-            self._filter = ("weapon" if text.startswith("Weapons")
-                            else "shield" if text.startswith("Shields")
-                            else "all")
+            if text.startswith("Weapons"):
+                self._filter = "weapon"
+            elif text.startswith("Shields"):
+                self._filter = "shield"
+            elif text.startswith("Staves"):
+                self._filter = "staff"
+            else:
+                self._filter = "all"
             self.refresh_list()
+
+    def _on_search(self, text: str) -> None:
+        self._search = text.strip().lower()
+        self.refresh_list()
 
     def refresh_list(self) -> None:
         self._list.blockSignals(True)
@@ -131,7 +156,11 @@ class WeaponsListTab(QWidget):
                 continue
             if self._filter == "shield" and not w.is_shield:
                 continue
-            tag = "[S]" if w.is_shield else "[W]"
+            if self._filter == "staff" and not getattr(w, "is_staff", False):
+                continue
+            if self._search and self._search not in w.name.lower():
+                continue
+            tag = "[S]" if w.is_shield else ("[*]" if getattr(w, "is_staff", False) else "[W]")
             item = QListWidgetItem(f"{tag} {w.name}")
             item.setData(Qt.ItemDataRole.UserRole, w.id)
             self._list.addItem(item)
@@ -156,8 +185,10 @@ class WeaponsListTab(QWidget):
         self._current_id = wid
         self._name_in.setText(w.name)
         self._stamina_in.setValue(w.stamina_cost)
+        self._mana_in.setValue(getattr(w, "mana_cost", 0))
         self._damage_in.setValue(w.damage)
         self._is_shield_in.setChecked(w.is_shield)
+        self._is_staff_in.setChecked(getattr(w, "is_staff", False))
         self._block_in.setValue(w.block_cost)
         self._max_def_in.setValue(w.max_defense)
         self._dmg_neg_in.setValue(w.damage_negation)
@@ -173,8 +204,10 @@ class WeaponsListTab(QWidget):
             return
         w.name = self._name_in.text() or w.name
         w.stamina_cost = self._stamina_in.value()
+        w.mana_cost = self._mana_in.value()
         w.damage = self._damage_in.value()
         w.is_shield = self._is_shield_in.isChecked()
+        w.is_staff = self._is_staff_in.isChecked()
         w.block_cost = self._block_in.value()
         w.max_defense = self._max_def_in.value()
         w.damage_negation = self._dmg_neg_in.value()
@@ -196,10 +229,8 @@ class WeaponsListTab(QWidget):
         if not w:
             return
         import copy
-        clone = copy.deepcopy(w)
-        clone.id = ""  # let dataclass generate? — easier to reassign manually
         from models import new_id
-        clone.id = new_id("w")
+        clone = copy.deepcopy(w); clone.id = new_id("w")
         clone.name = f"{w.name} (copy)"
         self._state.state.weapons.append(clone)
         self._state.lists_changed.emit()
@@ -222,6 +253,7 @@ class ArmorListTab(QWidget):
         super().__init__(parent)
         self._state = state
         self._current_id: Optional[str] = None
+        self._search: str = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
@@ -236,6 +268,8 @@ class ArmorListTab(QWidget):
         toolbar.addWidget(add); toolbar.addWidget(dup); toolbar.addWidget(rm)
         toolbar.addStretch(1)
         outer.addLayout(toolbar)
+
+        outer.addLayout(_make_search_row("name or slot…", self._on_search))
 
         split = QSplitter(Qt.Orientation.Horizontal)
         outer.addWidget(split, 1)
@@ -272,16 +306,22 @@ class ArmorListTab(QWidget):
         form_outer.addStretch(1)
 
         split.addWidget(detail)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 3)
+        split.setStretchFactor(0, 1); split.setStretchFactor(1, 3)
 
         self._state.lists_changed.connect(self.refresh_list)
+        self.refresh_list()
+
+    def _on_search(self, text: str) -> None:
+        self._search = text.strip().lower()
         self.refresh_list()
 
     def refresh_list(self) -> None:
         self._list.blockSignals(True)
         self._list.clear()
         for a in self._state.state.armors:
+            if self._search:
+                if self._search not in a.name.lower() and self._search not in a.slot.lower():
+                    continue
             item = QListWidgetItem(f"[{a.slot[0].upper()}] {a.name} (av {a.armor_value})")
             item.setData(Qt.ItemDataRole.UserRole, a.id)
             self._list.addItem(item)
@@ -339,8 +379,7 @@ class ArmorListTab(QWidget):
             return
         import copy
         from models import new_id
-        clone = copy.deepcopy(a)
-        clone.id = new_id("a")
+        clone = copy.deepcopy(a); clone.id = new_id("a")
         clone.name = f"{a.name} (copy)"
         self._state.state.armors.append(clone)
         self._state.lists_changed.emit()
@@ -363,6 +402,7 @@ class SpellsListTab(QWidget):
         super().__init__(parent)
         self._state = state
         self._current_id: Optional[str] = None
+        self._search: str = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
@@ -374,6 +414,8 @@ class SpellsListTab(QWidget):
         toolbar.addWidget(add); toolbar.addWidget(dup); toolbar.addWidget(rm); toolbar.addStretch(1)
         outer.addLayout(toolbar)
 
+        outer.addLayout(_make_search_row("name or school…", self._on_search))
+
         split = QSplitter(Qt.Orientation.Horizontal)
         outer.addWidget(split, 1)
         self._list = QListWidget(); self._list.setMinimumWidth(220)
@@ -383,6 +425,8 @@ class SpellsListTab(QWidget):
         detail = QWidget(); form = QFormLayout(detail)
         self._name_in = QLineEdit()
         self._mana_in = QSpinBox(); self._mana_in.setRange(0, 99999)
+        self._stamina_in = QSpinBox(); self._stamina_in.setRange(0, 99999)
+        self._damage_in = QSpinBox(); self._damage_in.setRange(0, 99999)
         self._arcana_lvl_in = QSpinBox(); self._arcana_lvl_in.setRange(1, 100)
         self._potency_in = QLineEdit()
         self._school_in = QLineEdit()
@@ -391,6 +435,8 @@ class SpellsListTab(QWidget):
         apply_btn.clicked.connect(self._on_apply)
         form.addRow("Name:", self._name_in)
         form.addRow("Mana Cost:", self._mana_in)
+        form.addRow("Stamina Cost:", self._stamina_in)
+        form.addRow("Damage:", self._damage_in)
         form.addRow("Arcana Level:", self._arcana_lvl_in)
         form.addRow("Potency:", self._potency_in)
         form.addRow("School:", self._school_in)
@@ -404,10 +450,22 @@ class SpellsListTab(QWidget):
         self._state.lists_changed.connect(self.refresh_list)
         self.refresh_list()
 
+    def _on_search(self, text: str) -> None:
+        self._search = text.strip().lower()
+        self.refresh_list()
+
     def refresh_list(self) -> None:
         self._list.blockSignals(True); self._list.clear()
         for s in self._state.state.spells:
-            item = QListWidgetItem(f"{s.name} (mana {s.mana_cost})")
+            if self._search:
+                if self._search not in s.name.lower() and self._search not in s.school.lower():
+                    continue
+            dmg = getattr(s, "damage", 0)
+            label = f"{s.name} (mana {s.mana_cost}"
+            if dmg:
+                label += f", dmg {dmg}"
+            label += ")"
+            item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, s.id)
             self._list.addItem(item)
             if s.id == self._current_id:
@@ -431,6 +489,8 @@ class SpellsListTab(QWidget):
         self._current_id = sid
         self._name_in.setText(s.name)
         self._mana_in.setValue(s.mana_cost)
+        self._stamina_in.setValue(getattr(s, "stamina_cost", 0))
+        self._damage_in.setValue(getattr(s, "damage", 0))
         self._arcana_lvl_in.setValue(s.arcana_level)
         self._potency_in.setText(s.potency)
         self._school_in.setText(s.school)
@@ -444,6 +504,8 @@ class SpellsListTab(QWidget):
             return
         s.name = self._name_in.text() or s.name
         s.mana_cost = self._mana_in.value()
+        s.stamina_cost = self._stamina_in.value()
+        s.damage = self._damage_in.value()
         s.arcana_level = self._arcana_lvl_in.value()
         s.potency = self._potency_in.text()
         s.school = self._school_in.text()
@@ -485,6 +547,7 @@ class ItemsListTab(QWidget):
         super().__init__(parent)
         self._state = state
         self._current_id: Optional[str] = None
+        self._search: str = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
@@ -496,6 +559,8 @@ class ItemsListTab(QWidget):
         toolbar.addWidget(add); toolbar.addWidget(dup); toolbar.addWidget(rm); toolbar.addStretch(1)
         outer.addLayout(toolbar)
 
+        outer.addLayout(_make_search_row("name or tag…", self._on_search))
+
         split = QSplitter(Qt.Orientation.Horizontal)
         outer.addWidget(split, 1)
         self._list = QListWidget(); self._list.setMinimumWidth(220)
@@ -506,12 +571,22 @@ class ItemsListTab(QWidget):
         self._name_in = QLineEdit()
         self._slot_count_in = QSpinBox(); self._slot_count_in.setRange(0, 999)
         self._tags_in = QLineEdit(); self._tags_in.setPlaceholderText("comma,separated,tags")
+        self._stamina_in = QSpinBox(); self._stamina_in.setRange(0, 9999)
+        self._mana_in = QSpinBox(); self._mana_in.setRange(0, 9999)
+        self._hp_effect_in = QSpinBox(); self._hp_effect_in.setRange(-9999, 9999)
+        self._stam_effect_in = QSpinBox(); self._stam_effect_in.setRange(-9999, 9999)
+        self._mana_effect_in = QSpinBox(); self._mana_effect_in.setRange(-9999, 9999)
         self._desc_in = QPlainTextEdit(); self._desc_in.setFixedHeight(120)
         apply_btn = QPushButton("Apply"); apply_btn.setProperty("role", "primary")
         apply_btn.clicked.connect(self._on_apply)
         form.addRow("Name:", self._name_in)
         form.addRow("Slot Count:", self._slot_count_in)
         form.addRow("Tags:", self._tags_in)
+        form.addRow("Stamina Cost to use:", self._stamina_in)
+        form.addRow("Mana Cost to use:", self._mana_in)
+        form.addRow("HP Effect (+gain / -drain):", self._hp_effect_in)
+        form.addRow("Stamina Effect:", self._stam_effect_in)
+        form.addRow("Mana Effect:", self._mana_effect_in)
         form.addRow("Description:", self._desc_in)
         form.addRow("", apply_btn)
 
@@ -521,10 +596,29 @@ class ItemsListTab(QWidget):
         self._state.lists_changed.connect(self.refresh_list)
         self.refresh_list()
 
+    def _on_search(self, text: str) -> None:
+        self._search = text.strip().lower()
+        self.refresh_list()
+
     def refresh_list(self) -> None:
         self._list.blockSignals(True); self._list.clear()
         for it in self._state.state.items:
-            item = QListWidgetItem(f"{it.name} (slot {it.slot_count})")
+            if self._search:
+                name_match = self._search in it.name.lower()
+                tag_match = any(self._search in t.lower() for t in (it.tags or []))
+                if not name_match and not tag_match:
+                    continue
+            label = f"{it.name} (slot {it.slot_count})"
+            effects = []
+            if getattr(it, "hp_effect", 0):
+                effects.append(f"HP{it.hp_effect:+d}")
+            if getattr(it, "stamina_effect", 0):
+                effects.append(f"SP{it.stamina_effect:+d}")
+            if getattr(it, "mana_effect", 0):
+                effects.append(f"MP{it.mana_effect:+d}")
+            if effects:
+                label += "  " + " ".join(effects)
+            item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, it.id)
             self._list.addItem(item)
             if it.id == self._current_id:
@@ -549,6 +643,11 @@ class ItemsListTab(QWidget):
         self._name_in.setText(it.name)
         self._slot_count_in.setValue(it.slot_count)
         self._tags_in.setText(",".join(it.tags))
+        self._stamina_in.setValue(getattr(it, "stamina_cost", 0))
+        self._mana_in.setValue(getattr(it, "mana_cost", 0))
+        self._hp_effect_in.setValue(getattr(it, "hp_effect", 0))
+        self._stam_effect_in.setValue(getattr(it, "stamina_effect", 0))
+        self._mana_effect_in.setValue(getattr(it, "mana_effect", 0))
         self._desc_in.setPlainText(it.description)
 
     def _on_apply(self) -> None:
@@ -560,6 +659,11 @@ class ItemsListTab(QWidget):
         it.name = self._name_in.text() or it.name
         it.slot_count = self._slot_count_in.value()
         it.tags = [t.strip() for t in self._tags_in.text().split(",") if t.strip()]
+        it.stamina_cost = self._stamina_in.value()
+        it.mana_cost = self._mana_in.value()
+        it.hp_effect = self._hp_effect_in.value()
+        it.stamina_effect = self._stam_effect_in.value()
+        it.mana_effect = self._mana_effect_in.value()
         it.description = self._desc_in.toPlainText()
         self._state.log_event("item_edited", f"Edited item '{it.name}'", category="change")
         self._state.lists_changed.emit()
@@ -590,7 +694,7 @@ class ItemsListTab(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# Global Lists container tab
+# Equipment List container tab (renamed from "Global Lists" in v3.2)
 # ---------------------------------------------------------------------------
 
 class GlobalListsTab(QWidget):

@@ -341,7 +341,8 @@ def derive_proficiency_view(character: Character) -> dict[str, dict[str, float]]
 def derive_combat_view(character: Character,
                        weapons: list[Weapon],
                        armors: list[Armor],
-                       items: Optional[list] = None) -> dict[str, float]:
+                       items: Optional[list] = None,
+                       spell=None) -> dict[str, float]:
     profs = derive_proficiency_view(character)
     armor_throw = profs["armor"]["throw"]
     armor_sp_eff = character.effective_sp("armor")
@@ -370,7 +371,16 @@ def derive_combat_view(character: Character,
     martial = martial_atk(weapon_damage, profs["martial"]["throw"],
                           character.effective_sp("martial"),
                           character.form_mult("martial"), character.dice)
-    arcana = arcana_atk(weapon_damage, profs["arcana"]["throw"],
+    # v3.2: Arcana uses the equipped spell's damage when a staff/wand is held
+    # (or when can_cast_without_staff is True with a spell selected). The
+    # weapon's own damage is NOT added to the arcana attack — the staff is
+    # purely a focus.
+    arcana_dmg_input = weapon_damage
+    if spell is not None and getattr(spell, "damage", 0):
+        arcana_dmg_input = spell.damage
+    elif weapon is not None and getattr(weapon, "is_staff", False):
+        arcana_dmg_input = 0  # staff with no spell selected: no arcana damage
+    arcana = arcana_atk(arcana_dmg_input, profs["arcana"]["throw"],
                         character.effective_sp("arcana"),
                         character.form_mult("arcana"), character.dice)
     ranged = ranged_atk(weapon_damage, profs["ranged"]["throw"],
@@ -411,3 +421,58 @@ def vital_max_gain_from_sp(current_total_sp: int, added_sp: float) -> int:
     cur_level = level(current_total_sp)
     new_level = level(int(round(current_total_sp + added_sp)))
     return vital_max(new_level) - vital_max(cur_level)
+
+
+# ---------------------------------------------------------------------------
+# v3.2 - Recommended KP value
+# ---------------------------------------------------------------------------
+
+def recommended_kp(character: Character,
+                   weapons: list[Weapon],
+                   armors: list[Armor],
+                   items: Optional[list] = None) -> dict[str, float]:
+    """Suggest a Kill-Point bounty value for this character based on their
+    current stats. Returns a dict with the components so the DM can see the
+    breakdown in Developer view.
+
+    Components:
+      - vitals    = weight_v * (HP_max + Stamina_max + Mana_max)
+      - prof      = weight_p * total_sp
+      - combat    = weight_c * (max ATK at d=10 + DEF value at d=10)
+      - total     = round((vitals + prof + combat) * global_mult)
+    """
+    # Save dice and temporarily set to 10 for the combat estimate.
+    saved_dice = character.dice
+    saved_dmg_received = character.dmg_received
+    character.dice = 10
+    character.dmg_received = 0
+    try:
+        cb = derive_combat_view(character, weapons, armors, items)
+    finally:
+        character.dice = saved_dice
+        character.dmg_received = saved_dmg_received
+
+    max_atk = max(cb.get("martial_atk", 0), cb.get("ranged_atk", 0),
+                  cb.get("arcana_atk", 0), cb.get("stealth_atk", 0))
+    def_v = cb.get("def_value", 0)
+
+    w_v = _eff("kp_rec_vitals_weight")
+    w_p = _eff("kp_rec_prof_weight")
+    w_c = _eff("kp_rec_combat_weight")
+    g = _eff("kp_rec_global_mult")
+
+    vitals_part = w_v * (character.health_max + character.stamina_max +
+                         character.mana_max)
+    prof_part = w_p * character.total_sp()
+    combat_part = w_c * (max_atk + def_v)
+
+    total = (vitals_part + prof_part + combat_part) * g
+    return {
+        "vitals_part": vitals_part,
+        "prof_part": prof_part,
+        "combat_part": combat_part,
+        "global_mult": g,
+        "max_atk": max_atk,
+        "def_value": def_v,
+        "total": int(round(max(0, total))),
+    }

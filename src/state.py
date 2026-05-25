@@ -46,7 +46,7 @@ for d in (SAVES_DIR, AUTOSAVE_DIR, BACKUP_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +133,7 @@ def _hydrate_encounter(d: dict) -> Encounter:
 # ---------------------------------------------------------------------------
 
 def _migrate_3_to_4(d: dict) -> dict:
-    """Apply v3 -> v4 changes: template/deceased flags, scaling modifiers,
-    rename encounters -> mobs."""
+    """v3 -> v4: template/deceased flags, scaling modifiers, rename encounters -> mobs."""
     if "encounters" in d and "mobs" not in d:
         d["mobs"] = d.pop("encounters")
     for group_key in ("party", "mobs", "npcs"):
@@ -150,10 +149,40 @@ def _migrate_3_to_4(d: dict) -> dict:
     return d
 
 
+def _migrate_4_to_5(d: dict) -> dict:
+    """v4 -> v5: encounter participant lists; staff/spell-coupling fields;
+    item/spell stamina+mana costs; KP recommendation modifiers."""
+    ae = d.get("active_encounter")
+    if ae is not None:
+        ae.setdefault("left_participant_ids", [])
+        ae.setdefault("right_participant_ids", [])
+        ae.setdefault("left_active_idx", 0)
+        ae.setdefault("right_active_idx", 0)
+        ae.setdefault("is_started", False)
+        ae.setdefault("items_used_left", [])
+        ae.setdefault("items_used_right", [])
+        # Promote legacy single-instance pointers into the participant lists
+        # so a save mid-encounter doesn't lose its combatants.
+        lid = ae.get("left_instance_id")
+        rid = ae.get("right_instance_id")
+        if lid and lid not in ae["left_participant_ids"]:
+            ae["left_participant_ids"].append(lid)
+        if rid and rid not in ae["right_participant_ids"]:
+            ae["right_participant_ids"].append(rid)
+        if ae["left_participant_ids"] or ae["right_participant_ids"]:
+            ae["is_started"] = True
+    d["schema_version"] = 5
+    return d
+
+
 def hydrate_app_state(d: dict) -> AppState:
     version = d.get("schema_version", SCHEMA_VERSION)
     if version < 4:
         d = _migrate_3_to_4(d)
+        version = 4
+    if version < 5:
+        d = _migrate_4_to_5(d)
+        version = 5
     if version > SCHEMA_VERSION:
         raise ValueError(
             f"Save file schema_version={version} is newer than supported "
@@ -670,10 +699,15 @@ class StateManager(QObject):
         for inst in enc.instances:
             if inst.instance_id == instance_id:
                 inst.is_in_bin = True
-                if enc.left_instance_id == instance_id:
-                    enc.left_instance_id = None
-                if enc.right_instance_id == instance_id:
-                    enc.right_instance_id = None
+                # Remove from participant lists if present
+                if instance_id in enc.left_participant_ids:
+                    enc.left_participant_ids.remove(instance_id)
+                if instance_id in enc.right_participant_ids:
+                    enc.right_participant_ids.remove(instance_id)
+                enc.left_active_idx = max(0, min(enc.left_active_idx,
+                                                  len(enc.left_participant_ids) - 1))
+                enc.right_active_idx = max(0, min(enc.right_active_idx,
+                                                   len(enc.right_participant_ids) - 1))
                 self.log_event("encounter_bin",
                                f"Sent '{inst.character.name}' to encounter bin",
                                category="combat")
@@ -693,42 +727,214 @@ class StateManager(QObject):
                 self.encounter_changed.emit()
                 return
 
-    def place_left(self, instance_id: Optional[str]) -> None:
+    # -- v3.2 participant assignment ---------------------------------------
+    def assign_to_side(self, instance_id: str, side: str) -> tuple[bool, str]:
+        """Assign a roster instance to 'left' or 'right'. For uniques the
+        instance is moved out of the roster (no longer assignable). For
+        template instances we duplicate so the template stays in the
+        roster for further use."""
+        enc = self.state.active_encounter
+        if enc is None:
+            return False, "no active encounter"
+        if side not in ("left", "right"):
+            return False, "bad side"
+        inst = self.get_instance(instance_id)
+        if inst is None or inst.is_in_bin:
+            return False, "instance not available"
+        # If already on a side, this is a no-op
+        if (instance_id in enc.left_participant_ids
+                or instance_id in enc.right_participant_ids):
+            return False, "already assigned"
+
+        target_list = (enc.left_participant_ids if side == "left"
+                       else enc.right_participant_ids)
+        if inst.is_template_instance:
+            # Duplicate the template instance so the roster keeps the original.
+            new_inst = copy.deepcopy(inst)
+            new_inst.instance_id = new_id("ei")
+            new_inst.character = copy.deepcopy(inst.character)
+            new_inst.character.id = new_id("c")
+            n = sum(1 for i in enc.instances
+                    if i.source_character_id == inst.source_character_id
+                    and not i.is_in_bin) + 1
+            src_name = new_inst.character.name.rsplit(" #", 1)[0]
+            new_inst.character.name = f"{src_name} #{n}"
+            new_inst.dice_history = []
+            enc.instances.append(new_inst)
+            target_list.append(new_inst.instance_id)
+        else:
+            target_list.append(instance_id)
+        self.encounter_changed.emit()
+        return True, "ok"
+
+    def unassign_from_side(self, instance_id: str) -> None:
         enc = self.state.active_encounter
         if enc is None:
             return
-        if instance_id and enc.right_instance_id == instance_id:
-            enc.right_instance_id = None
-        enc.left_instance_id = instance_id
+        changed = False
+        if instance_id in enc.left_participant_ids:
+            enc.left_participant_ids.remove(instance_id)
+            changed = True
+        if instance_id in enc.right_participant_ids:
+            enc.right_participant_ids.remove(instance_id)
+            changed = True
+        # Template duplicates that were never anything else can disappear back
+        # into the void (they have no character data outside the encounter).
+        inst = self.get_instance(instance_id)
+        if changed and inst is not None and inst.is_template_instance:
+            enc.instances = [i for i in enc.instances if i.instance_id != instance_id]
+        enc.left_active_idx = max(0, min(enc.left_active_idx,
+                                          len(enc.left_participant_ids) - 1))
+        enc.right_active_idx = max(0, min(enc.right_active_idx,
+                                           len(enc.right_participant_ids) - 1))
+        if changed:
+            self.encounter_changed.emit()
+
+    def start_combat(self) -> tuple[bool, str]:
+        """Transition the encounter from preparation to active mode."""
+        enc = self.state.active_encounter
+        if enc is None:
+            return False, "no active encounter"
+        if not enc.left_participant_ids and not enc.right_participant_ids:
+            return False, "Allocate at least one participant per side first."
+        enc.is_started = True
+        enc.left_active_idx = 0
+        enc.right_active_idx = 0
+        self.log_event("encounter_started_combat",
+                       f"Combat begins in '{enc.name}'", category="combat")
+        self.encounter_changed.emit()
+        return True, "ok"
+
+    def set_active_idx(self, side: str, idx: int) -> None:
+        enc = self.state.active_encounter
+        if enc is None:
+            return
+        ids = enc.left_participant_ids if side == "left" else enc.right_participant_ids
+        if not ids:
+            return
+        idx = idx % len(ids)
+        if side == "left":
+            enc.left_active_idx = idx
+        else:
+            enc.right_active_idx = idx
         enc.in_conflict_mode = False
         self.encounter_changed.emit()
 
-    def place_right(self, instance_id: Optional[str]) -> None:
+    def cycle_active(self, side: str, delta: int) -> None:
         enc = self.state.active_encounter
         if enc is None:
             return
-        if instance_id and enc.left_instance_id == instance_id:
-            enc.left_instance_id = None
-        enc.right_instance_id = instance_id
-        enc.in_conflict_mode = False
+        ids = enc.left_participant_ids if side == "left" else enc.right_participant_ids
+        if not ids:
+            return
+        cur = enc.left_active_idx if side == "left" else enc.right_active_idx
+        self.set_active_idx(side, (cur + delta) % len(ids))
+
+    def active_instance(self, side: str) -> Optional[EncounterInstance]:
+        enc = self.state.active_encounter
+        if enc is None:
+            return None
+        ids = enc.left_participant_ids if side == "left" else enc.right_participant_ids
+        idx = enc.left_active_idx if side == "left" else enc.right_active_idx
+        if not ids:
+            return None
+        if idx >= len(ids):
+            idx = 0
+        return self.get_instance(ids[idx])
+
+    def toggle_conflict_mode(self) -> tuple[bool, str]:
+        """Single-button toggle: Enter <-> Exit Conflict."""
+        enc = self.state.active_encounter
+        if enc is None:
+            return False, "no active encounter"
+        if enc.in_conflict_mode:
+            enc.in_conflict_mode = False
+            enc.items_used_left = []
+            enc.items_used_right = []
+            self.encounter_changed.emit()
+            return True, "exited"
+        if not enc.is_started:
+            return False, "Start combat first."
+        l_inst = self.active_instance("left")
+        r_inst = self.active_instance("right")
+        if l_inst is None or r_inst is None:
+            return False, "Need a combatant on both sides."
+        enc.in_conflict_mode = True
+        enc.items_used_left = []
+        enc.items_used_right = []
         self.encounter_changed.emit()
+        return True, "entered"
 
     def enter_conflict_mode(self) -> bool:
-        enc = self.state.active_encounter
-        if enc is None:
-            return False
-        if not enc.left_instance_id or not enc.right_instance_id:
-            return False
-        enc.in_conflict_mode = True
-        self.encounter_changed.emit()
-        return True
+        ok, _ = self.toggle_conflict_mode()
+        return ok and (self.state.active_encounter is not None
+                       and self.state.active_encounter.in_conflict_mode)
 
     def exit_conflict_mode(self) -> None:
         enc = self.state.active_encounter
-        if enc is None:
+        if enc is None or not enc.in_conflict_mode:
             return
-        enc.in_conflict_mode = False
+        self.toggle_conflict_mode()
+
+    # Legacy single-pointer helpers kept for any stragglers (unused in v3.2 UI).
+    def place_left(self, instance_id: Optional[str]) -> None:
+        if instance_id:
+            self.assign_to_side(instance_id, "left")
+
+    def place_right(self, instance_id: Optional[str]) -> None:
+        if instance_id:
+            self.assign_to_side(instance_id, "right")
+
+    def use_item_in_conflict(self, side: str, instance_id: str,
+                              item_id: str) -> tuple[bool, str]:
+        """Apply an item's effect to the active instance on `side`. The item
+        must be in the character's inventory. Stamina/mana costs are deducted;
+        HP/Stamina/Mana effects are added. Returns (ok, message)."""
+        enc = self.state.active_encounter
+        if enc is None:
+            return False, "no active encounter"
+        inst = self.get_instance(instance_id)
+        if inst is None or inst.character is None:
+            return False, "instance gone"
+        item = next((i for i in self.state.items if i.id == item_id), None)
+        if item is None:
+            return False, "item not found"
+        # Find one inventory entry holding this item.
+        entry = next((e for e in inst.character.inventory
+                      if e.item_id == item_id and e.quantity > 0), None)
+        if entry is None:
+            return False, f"'{inst.character.name}' has no '{item.name}' in inventory."
+        cost_stam = getattr(item, "stamina_cost", 0)
+        cost_mana = getattr(item, "mana_cost", 0)
+        if inst.character.stamina_current < cost_stam:
+            return False, f"Not enough stamina to use '{item.name}'."
+        if inst.character.mana_current < cost_mana:
+            return False, f"Not enough mana to use '{item.name}'."
+        inst.character.stamina_current -= cost_stam
+        inst.character.mana_current -= cost_mana
+        inst.character.health_current = max(0, min(
+            inst.character.health_max,
+            inst.character.health_current + getattr(item, "hp_effect", 0)))
+        inst.character.stamina_current = max(0, min(
+            inst.character.stamina_max,
+            inst.character.stamina_current + getattr(item, "stamina_effect", 0)))
+        inst.character.mana_current = max(0, min(
+            inst.character.mana_max,
+            inst.character.mana_current + getattr(item, "mana_effect", 0)))
+        entry.quantity -= 1
+        if entry.quantity <= 0:
+            inst.character.inventory.remove(entry)
+        track = enc.items_used_left if side == "left" else enc.items_used_right
+        track.append(item_id)
+        self.log_event(
+            "item_used",
+            f"{inst.character.name} used '{item.name}' "
+            f"(HP{getattr(item, 'hp_effect', 0):+d}, "
+            f"SP{getattr(item, 'stamina_effect', 0):+d}, "
+            f"MP{getattr(item, 'mana_effect', 0):+d})",
+            category="combat", character_id=inst.character.id)
         self.encounter_changed.emit()
+        return True, f"Used '{item.name}'."
 
     def get_instance(self, instance_id: str) -> Optional[EncounterInstance]:
         enc = self.state.active_encounter
@@ -788,32 +994,58 @@ class StateManager(QObject):
         inst.dice_history = inst.dice_history[:4]
         self.encounter_changed.emit()
 
+    def _equipped_spell(self, character: Character):
+        """Return the Spell currently slotted into the active weapon, or None."""
+        w = character.get_active_weapon(self.state.weapons)
+        if w is None or not getattr(w, "is_staff", False):
+            return None
+        sid = (character.primary_spell_id if character.using_primary
+               else character.secondary_spell_id)
+        if not sid:
+            return None
+        return next((s for s in self.state.spells if s.id == sid), None)
+
+    def _action_costs(self, character: Character, selection: str) -> tuple[int, int]:
+        """Stamina+mana cost of using `selection` ATK with current equipment."""
+        w = character.get_active_weapon(self.state.weapons)
+        stam = w.stamina_cost if w else 0
+        mana = getattr(w, "mana_cost", 0) if w else 0
+        if selection == "arcana":
+            spell = self._equipped_spell(character)
+            if spell is None and character.can_cast_without_staff:
+                # Free-cast: use the character's "selected_spell_id" if any.
+                if character.selected_spell_id:
+                    spell = next((s for s in self.state.spells
+                                  if s.id == character.selected_spell_id), None)
+            if spell is not None:
+                stam += getattr(spell, "stamina_cost", 0)
+                mana += spell.mana_cost
+        return stam, mana
+
     def resolve_conflict(self) -> str:
         """Apply conflict-mode damage exchange to both sides. Returns a summary message."""
         enc = self.state.active_encounter
         if enc is None or not enc.in_conflict_mode:
             return "no conflict active"
-        left = self.get_instance(enc.left_instance_id) if enc.left_instance_id else None
-        right = self.get_instance(enc.right_instance_id) if enc.right_instance_id else None
+        left = self.active_instance("left")
+        right = self.active_instance("right")
         if not left or not right:
             return "missing combatant"
 
         msgs = []
-        # Compute damage values for each side using selected ATK
         left_dmg = self._atk_value_for_selection(left.character, enc.left_atk_selection) \
             if not enc.left_is_receiver_only else 0
         right_dmg = self._atk_value_for_selection(right.character, enc.right_atk_selection) \
             if not enc.right_is_receiver_only else 0
 
-        # Apply incoming damage as dmg_received on the OTHER side, then compute hp loss
         if not enc.left_is_receiver_only and left_dmg > 0:
             right.character.dmg_received = int(round(left_dmg))
             cb_r = me.derive_combat_view(right.character, self.state.weapons,
-                                         self.state.armors, self.state.items)
+                                         self.state.armors, self.state.items,
+                                         spell=self._equipped_spell(right.character))
             shield_r = right.character.get_shield(self.state.weapons)
             loss = cb_r["shielded_hp_loss"] if shield_r else cb_r["hp_loss"]
             self.apply_hp_loss(right.character, loss)
-            # shield break?
             if shield_r and shield_r.max_defense < right.character.dmg_received:
                 right.character.shield_id = None
                 msgs.append(f"{right.character.name}'s shield broke")
@@ -821,7 +1053,8 @@ class StateManager(QObject):
         if not enc.right_is_receiver_only and right_dmg > 0:
             left.character.dmg_received = int(round(right_dmg))
             cb_l = me.derive_combat_view(left.character, self.state.weapons,
-                                         self.state.armors, self.state.items)
+                                         self.state.armors, self.state.items,
+                                         spell=self._equipped_spell(left.character))
             shield_l = left.character.get_shield(self.state.weapons)
             loss = cb_l["shielded_hp_loss"] if shield_l else cb_l["hp_loss"]
             self.apply_hp_loss(left.character, loss)
@@ -829,19 +1062,22 @@ class StateManager(QObject):
                 left.character.shield_id = None
                 msgs.append(f"{left.character.name}'s shield broke")
 
-        # Apply stamina cost of acting (simple: weapon.stamina_cost)
-        if not enc.left_is_receiver_only:
-            w = left.character.get_active_weapon(self.state.weapons)
-            if w:
-                left.character.stamina_current = max(
-                    0, left.character.stamina_current - w.stamina_cost)
-        if not enc.right_is_receiver_only:
-            w = right.character.get_active_weapon(self.state.weapons)
-            if w:
-                right.character.stamina_current = max(
-                    0, right.character.stamina_current - w.stamina_cost)
+        # Stamina + mana cost of acting
+        for side_inst, recv_only, selection in (
+            (left, enc.left_is_receiver_only, enc.left_atk_selection),
+            (right, enc.right_is_receiver_only, enc.right_atk_selection),
+        ):
+            if recv_only:
+                continue
+            stam, mana = self._action_costs(side_inst.character, selection)
+            side_inst.character.stamina_current = max(
+                0, side_inst.character.stamina_current - stam)
+            side_inst.character.mana_current = max(
+                0, side_inst.character.mana_current - mana)
 
         enc.in_conflict_mode = False
+        enc.items_used_left = []
+        enc.items_used_right = []
         msg = "Conflict resolved. " + " ".join(msgs)
         self.log_event("conflict_resolved", msg, category="combat")
         self.encounter_changed.emit()
@@ -849,7 +1085,8 @@ class StateManager(QObject):
 
     def _atk_value_for_selection(self, character: Character, selection: str) -> float:
         cb = me.derive_combat_view(character, self.state.weapons,
-                                   self.state.armors, self.state.items)
+                                   self.state.armors, self.state.items,
+                                   spell=self._equipped_spell(character))
         return cb.get(f"{selection}_atk", 0)
 
     def end_encounter(self) -> str:
@@ -867,6 +1104,12 @@ class StateManager(QObject):
         enc_name = enc.name or "Untitled Encounter"
         survivors = 0
         new_uniques = 0
+        # v3.2: side-aware participant counts override the per-character field.
+        side_for: dict[str, int] = {}
+        for iid in enc.left_participant_ids:
+            side_for[iid] = max(1, len(enc.left_participant_ids))
+        for iid in enc.right_participant_ids:
+            side_for[iid] = max(1, len(enc.right_participant_ids))
         for inst in enc.instances:
             if inst.is_in_bin:
                 continue
@@ -874,8 +1117,9 @@ class StateManager(QObject):
             alive = (inst_char.health_current > 0 and not inst_char.is_deceased)
             # Compute SP earned during this encounter from KP fields
             cur_level = me.level(inst_char.total_sp())
+            participants_n = side_for.get(inst.instance_id, inst_char.participants)
             sp = me.sp_earned(inst_char.solo_kp, inst_char.kill_points,
-                              inst_char.participants, cur_level)
+                              participants_n, cur_level)
             if inst.is_template_instance:
                 if alive:
                     import copy as _copy

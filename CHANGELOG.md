@@ -1,5 +1,88 @@
 # DnD Manager Changelog
 
+## v3.2 — Feature pass (Phases 1-5)
+
+Schema bump: `schema_version 4 -> 5`. Old saves migrate automatically.
+
+### Renames + small wins
+- "Global Lists" tab renamed to **"Equipment List"**.
+- The Opponent? button is now a single toggle: **"Enter Conflict"** while
+  preparing, **"Exit Conflict (apply damage)"** while a conflict is active.
+- "Delete Character" is disabled (with a tooltip) while that character is in
+  an active encounter, so a combatant can't be wiped mid-battle.
+- **Search bars** added to: Party, Mobs, NPCs, Encounter Roster, Weapons &
+  Shields, Armor, Spells, Items. Live-filter by name (or slot/school/tag
+  where applicable).
+
+### Recommended Kill Points
+- Battle Statistics now shows a **Recommended KP** value next to the Total KP
+  field, computed from vitals + total SP + (max ATK + DEF at d10) and a
+  configurable global multiplier. "Use as Total KP" copies it in.
+- **Developer view** shows the full breakdown so you can see exactly how the
+  number was assembled. Four new modifiers in the scaling panel (vitals
+  weight, proficiency weight, combat weight, global multiplier) let you
+  tune the formula.
+
+### Weapons + spells unified
+- Weapons get an **"Is staff/wand"** checkbox. When checked, the weapon
+  becomes a spell focus.
+- Characters get a **"Can cast magic without a staff/wand"** flag — for
+  innate casters.
+- When a staff/wand is equipped as primary or secondary, the weapons
+  section shows a **spell dropdown** for that slot (picking from the
+  character's known spells). The slotted spell's damage feeds the Arcana
+  ATK calculation; the staff's own damage does **not**.
+- Spells got new **stamina_cost** and **damage** fields.
+- Items got **stamina_cost**, **mana_cost**, and **hp_effect /
+  stamina_effect / mana_effect** fields.
+- Weapons got a **mana_cost** field for enchanted weapons.
+
+### Encounter overhaul
+- **Roster moved to the middle column** during preparation. Search bar at
+  the top, then each character has L◀ / R▶ buttons that assign it to a
+  side. Uniques disappear from the roster once assigned; templates stay so
+  multiple copies can be placed.
+- The old "+ Add Character(s)" picker dialog is gone — adding happens
+  inline from the middle roster.
+- New **Begin Combat** button locks in the participant list and transitions
+  to the active encounter view.
+- During active combat, the **side pages show one participant at a time**
+  with **◀ prev / next ▶** arrows above the sheet to cycle through the
+  other participants on that side.
+- The character pages in combat use a **compact, non-scrolling view** with
+  HP/SP/MP bars, ATK/DEF numbers, equipment summary, big separated DICE
+  input, and a "Use Item from Inventory…" button. The full character
+  sheet remains in the Global Character List for deep editing.
+- **Conflict Resolution panel** is wider; "Damage dealt", "Damage
+  received", "Stamina cost", and a new "Mana cost" line all get their own
+  rows so nothing is clipped anymore.
+- **Mana is deducted in conflicts** when the action uses it: spells via a
+  slotted staff, enchanted weapons with a `mana_cost`. Stamina cost
+  accumulates spell+weapon costs together.
+- **Items used during a conflict** are applied during resolution. If a
+  character uses an instant-heal potion mid-conflict, the HP gain is in
+  effect before damage is subtracted — so a potion can save them from a
+  fatal blow.
+- `participants` count is now derived from each side's size during the
+  end-encounter SP payout, instead of the per-character field.
+
+### Animations
+- Phase transitions (preparation→combat, conflict button→panel) use a
+  220 ms fade-in via `QGraphicsOpacityEffect`. New roster entries, side
+  participant chips, and the compact character cards all fade in. The
+  previous attempt apparently never landed in the encounter tab; this
+  one does.
+
+### Notes
+- **Multi-encounter** and **cross-encounter conflicts** (Phase 6) are
+  deferred per user direction and will arrive in a later release.
+- An unrelated latent bug in `GlobalCharacterListTab.tear_down_detail_sheets`
+  (dead code referencing an undefined variable, which silently swallowed an
+  exception and left the developer-view toggle unwired) was fixed in
+  passing.
+
+---
+
 ## v3.1.1 — Bug-fix and refinement pass
 
 ### Critical fixes

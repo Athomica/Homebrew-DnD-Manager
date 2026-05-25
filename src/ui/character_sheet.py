@@ -201,6 +201,12 @@ class CharacterSheet(QWidget):
         self._lock_banner.setVisible(in_enc)
         for s in self._sections.values():
             s.setDisabled(in_enc)
+        # v3.2: Delete button is disabled while the character is in an encounter.
+        if hasattr(self, "_del_btn"):
+            self._del_btn.setEnabled(not in_enc)
+            self._del_btn.setToolTip(
+                "Disabled while this character is in an active encounter."
+                if in_enc else "")
 
     # ------------------------------------------------------------------
     # Header strip
@@ -259,10 +265,12 @@ class CharacterSheet(QWidget):
         self._view_toggle.clicked.connect(self._on_toggle_view)
         side.addWidget(self._view_toggle)
 
-        del_btn = QPushButton("Delete Character")
-        del_btn.setProperty("role", "danger")
-        del_btn.clicked.connect(self._on_delete_self)
-        side.addWidget(del_btn)
+        # v3.2: Delete is disabled while the character is in an active encounter
+        # so the DM doesn't wipe a combatant mid-battle.
+        self._del_btn = QPushButton("Delete Character")
+        self._del_btn.setProperty("role", "danger")
+        self._del_btn.clicked.connect(self._on_delete_self)
+        side.addWidget(self._del_btn)
         grid.addLayout(side, 3, 0, 1, 4)
 
         return box
@@ -363,6 +371,16 @@ class CharacterSheet(QWidget):
         self._vital_calc_label = QLabel("")
         self._vital_calc_label.setProperty("role", "dim")
         self._vital_calc_label.setWordWrap(True)
+        # v3.2: recommended KP bounty + breakdown in Dev view
+        self._kp_rec_label = QLabel("0")
+        self._kp_rec_label.setProperty("role", "big")
+        self._kp_rec_apply = QPushButton("Use as Total KP")
+        self._kp_rec_apply.setToolTip(
+            "Copy the recommended value into the 'Total Kill Points' field above.")
+        self._kp_rec_apply.clicked.connect(self._on_apply_recommended_kp)
+        self._kp_rec_breakdown = QLabel("")
+        self._kp_rec_breakdown.setProperty("role", "dim")
+        self._kp_rec_breakdown.setWordWrap(True)
 
         # v3.1.1: Unallocated SP pool with manual spend buttons
         unalloc_row = QHBoxLayout()
@@ -381,15 +399,34 @@ class CharacterSheet(QWidget):
         self._participants_in.valueChanged.connect(
             lambda v: self._set_field("participants", v))
 
-        form.addRow("Total Kill Points:", self._kp_in)
+        # Total KP row with the recommendation next to it
+        kp_row = QHBoxLayout()
+        kp_row.setSpacing(10)
+        kp_row.addWidget(self._kp_in)
+        kp_row.addSpacing(20)
+        kp_row.addWidget(QLabel("Recommended:"))
+        kp_row.addWidget(self._kp_rec_label)
+        kp_row.addWidget(self._kp_rec_apply)
+        kp_row.addStretch(1)
+        kp_row_w = QWidget(); kp_row_w.setLayout(kp_row)
+        form.addRow("Total Kill Points:", kp_row_w)
         form.addRow("Solo KP:", self._solo_kp_in)
         form.addRow("Participants:", self._participants_in)
         form.addRow("SP Earned (this combat):", self._sp_earned_label)
         self._coord_row_label = QLabel("Coordination:")
         form.addRow(self._coord_row_label, self._coord_label)
+        # Dev-view-only breakdown label
+        self._kp_rec_breakdown_row_label = QLabel("KP rec. breakdown:")
+        form.addRow(self._kp_rec_breakdown_row_label, self._kp_rec_breakdown)
         form.addRow("Unallocated SP:", unalloc_wrap)
         form.addRow("", self._vital_calc_label)
         return wrap
+
+    def _on_apply_recommended_kp(self) -> None:
+        rec = me.recommended_kp(self._char, self._state.state.weapons,
+                                self._state.state.armors, self._state.state.items)
+        self._state.set_character_field(self._char, "kill_points", int(rec["total"]))
+        self._kp_in.setValue(int(rec["total"]))
 
     def _on_spend_unallocated_sp(self) -> None:
         from PyQt6.QtWidgets import QInputDialog
@@ -658,6 +695,23 @@ class CharacterSheet(QWidget):
         self._using_primary_chk.toggled.connect(
             lambda v: self._set_field("using_primary", v))
 
+        # v3.2: spell slots for staff/wand weapons
+        self._primary_spell_combo = NoWheelComboBox()
+        self._secondary_spell_combo = NoWheelComboBox()
+        self._primary_spell_label = QLabel("Primary spell:")
+        self._secondary_spell_label = QLabel("Secondary spell:")
+        self._primary_spell_combo.currentIndexChanged.connect(
+            lambda _i: self._on_combo_change("primary_spell_id", self._primary_spell_combo))
+        self._secondary_spell_combo.currentIndexChanged.connect(
+            lambda _i: self._on_combo_change("secondary_spell_id", self._secondary_spell_combo))
+
+        # v3.2: can cast without staff
+        self._cast_no_staff_chk = QCheckBox("Can cast magic without a staff/wand")
+        self._cast_no_staff_chk.setChecked(
+            getattr(self._char, "can_cast_without_staff", False))
+        self._cast_no_staff_chk.toggled.connect(
+            lambda v: self._set_field("can_cast_without_staff", v))
+
         self._primary_combo.currentIndexChanged.connect(
             lambda _i: self._on_combo_change("primary_weapon_id", self._primary_combo))
         self._secondary_combo.currentIndexChanged.connect(
@@ -667,12 +721,31 @@ class CharacterSheet(QWidget):
 
         grid.addWidget(QLabel("Primary:"), 0, 0)
         grid.addWidget(self._primary_combo, 0, 1)
+        grid.addWidget(self._primary_spell_label, 0, 2)
+        grid.addWidget(self._primary_spell_combo, 0, 3)
         grid.addWidget(QLabel("Secondary:"), 1, 0)
         grid.addWidget(self._secondary_combo, 1, 1)
+        grid.addWidget(self._secondary_spell_label, 1, 2)
+        grid.addWidget(self._secondary_spell_combo, 1, 3)
         grid.addWidget(QLabel("Shield:"), 2, 0)
         grid.addWidget(self._shield_combo, 2, 1)
         grid.addWidget(self._using_primary_chk, 3, 0, 1, 2)
+        grid.addWidget(self._cast_no_staff_chk, 3, 2, 1, 2)
         return wrap
+
+    def _refresh_spell_slot_visibility(self) -> None:
+        """Show staff spell dropdowns only when the corresponding weapon
+        is_staff=True, AND the character has spells available."""
+        weapons_by_id = {w.id: w for w in self._state.state.weapons}
+        prim = weapons_by_id.get(self._char.primary_weapon_id) if self._char.primary_weapon_id else None
+        sec = weapons_by_id.get(self._char.secondary_weapon_id) if self._char.secondary_weapon_id else None
+        prim_staff = bool(prim and getattr(prim, "is_staff", False))
+        sec_staff = bool(sec and getattr(sec, "is_staff", False))
+        if hasattr(self, "_primary_spell_label"):
+            self._primary_spell_label.setVisible(prim_staff)
+            self._primary_spell_combo.setVisible(prim_staff)
+            self._secondary_spell_label.setVisible(sec_staff)
+            self._secondary_spell_combo.setVisible(sec_staff)
 
     def _on_combo_change(self, field: str, combo: NoWheelComboBox) -> None:
         if self._suspend:
@@ -1112,6 +1185,9 @@ class CharacterSheet(QWidget):
 
             # Weapons
             self._using_primary_chk.setChecked(self._char.using_primary)
+            if hasattr(self, "_cast_no_staff_chk"):
+                self._cast_no_staff_chk.setChecked(
+                    getattr(self._char, "can_cast_without_staff", False))
 
             # Inventory list
             self._refresh_inventory()
@@ -1150,6 +1226,17 @@ class CharacterSheet(QWidget):
         self._coord_label.setText(f"{coord:.1f}")
         self._sp_earned_label.setText(f"{sp_earn:.1f}")
         self._unalloc_label.setText(f"{self._char.unallocated_sp:.1f}")
+
+        # KP recommendation (always computed; breakdown only shown in dev view)
+        rec = me.recommended_kp(self._char, self._state.state.weapons,
+                                self._state.state.armors, self._state.state.items)
+        self._kp_rec_label.setText(str(rec["total"]))
+        self._kp_rec_breakdown.setText(
+            f"vitals={rec['vitals_part']:.1f} + prof={rec['prof_part']:.1f} "
+            f"+ combat={rec['combat_part']:.1f} "
+            f"(maxATK={rec['max_atk']:.1f}, DEF={rec['def_value']:.1f}) "
+            f"× mult={rec['global_mult']:.2f} = {rec['total']}"
+        )
         if sp_earn > 0:
             gain = me.vital_max_gain_from_sp(total_sp, sp_earn)
             if gain > 0:
@@ -1219,6 +1306,11 @@ class CharacterSheet(QWidget):
         else:
             self._inv_overflow_label.setText("")
 
+        # v3.2: staff spell slot visibility depends on whether the currently
+        # equipped primary/secondary weapon is a staff/wand.
+        if hasattr(self, "_primary_spell_combo"):
+            self._refresh_spell_slot_visibility()
+
     def _refresh_kind_label(self) -> None:
         if self._char.role == "party":
             self._kind_label.setText("[ Unique party member ]")
@@ -1238,8 +1330,10 @@ class CharacterSheet(QWidget):
         self._view_toggle.setText("Developer view" if is_dev else "DM view")
 
     def _compute_combat(self) -> dict:
+        spell = self._char.get_equipped_spell(self._state.state.spells)
         return me.derive_combat_view(self._char, self._state.state.weapons,
-                                     self._state.state.armors, self._state.state.items)
+                                     self._state.state.armors, self._state.state.items,
+                                     spell=spell)
 
     def _refresh_spell_list(self) -> None:
         self._spell_list.clear()
@@ -1344,9 +1438,30 @@ class CharacterSheet(QWidget):
             self._inv_item_combo.addItem("(freeform)", None)
             for it in self._state.state.items:
                 self._inv_item_combo.addItem(f"{it.name} (slot {it.slot_count})", it.id)
+            # v3.2: staff spell slots — restricted to spells the character knows
+            if hasattr(self, "_primary_spell_combo"):
+                known_ids = set(self._char.spell_ids)
+                known_spells = [s for s in self._state.state.spells
+                                if s.id in known_ids]
+                for combo, current in (
+                    (self._primary_spell_combo, self._char.primary_spell_id),
+                    (self._secondary_spell_combo, self._char.secondary_spell_id),
+                ):
+                    combo.clear()
+                    combo.addItem("(none)", None)
+                    for s in known_spells:
+                        dmg_part = f", dmg {s.damage}" if getattr(s, "damage", 0) else ""
+                        combo.addItem(
+                            f"{s.name} (mana {s.mana_cost}{dmg_part})", s.id)
+                    if current:
+                        for i in range(combo.count()):
+                            if combo.itemData(i) == current:
+                                combo.setCurrentIndex(i)
+                                break
         finally:
             self._suspend = False
         self._refresh_kind_label()
+        self._refresh_spell_slot_visibility()
 
     # ------------------------------------------------------------------
     # View mode (DM vs Developer)
@@ -1365,6 +1480,10 @@ class CharacterSheet(QWidget):
         self._def_current_label.setVisible(is_dev)
         self._atk_current_lbl.setVisible(is_dev)
         self._atk_current_label.setVisible(is_dev)
+        # v3.2: KP recommendation breakdown only visible in Developer view.
+        if hasattr(self, "_kp_rec_breakdown_row_label"):
+            self._kp_rec_breakdown_row_label.setVisible(is_dev)
+            self._kp_rec_breakdown.setVisible(is_dev)
         # NOTE (v3.1.1): max input is editable in BOTH views per user feedback.
         self._view_toggle.setText("Developer view" if is_dev else "DM view")
         self._view_toggle.setChecked(is_dev)

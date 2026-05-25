@@ -26,8 +26,10 @@ class Weapon:
     id: str = field(default_factory=lambda: new_id("w"))
     name: str = "New Weapon"
     stamina_cost: int = 0
+    mana_cost: int = 0
     damage: int = 0
     is_shield: bool = False
+    is_staff: bool = False
     block_cost: int = 0
     max_defense: int = 0
     damage_negation: float = 0.0
@@ -52,6 +54,8 @@ class Spell:
     id: str = field(default_factory=lambda: new_id("s"))
     name: str = "New Spell"
     mana_cost: int = 0
+    stamina_cost: int = 0
+    damage: int = 0
     arcana_level: int = 1
     potency: str = "/"
     school: str = ""
@@ -65,6 +69,11 @@ class Item:
     slot_count: int = 1
     description: str = ""
     tags: list[str] = field(default_factory=list)
+    stamina_cost: int = 0
+    mana_cost: int = 0
+    hp_effect: int = 0
+    stamina_effect: int = 0
+    mana_effect: int = 0
 
 
 @dataclass
@@ -209,6 +218,11 @@ class Character:
     # Spells
     spell_ids: list[str] = field(default_factory=list)
     selected_spell_id: Optional[str] = None
+    # v3.2: spells slotted into staff/wand weapons
+    primary_spell_id: Optional[str] = None
+    secondary_spell_id: Optional[str] = None
+    # v3.2: characters that can cast without a staff
+    can_cast_without_staff: bool = False
 
     # Passives
     passives: list[Passive] = field(default_factory=list)
@@ -283,6 +297,21 @@ class Character:
                 return w
         return None
 
+    def get_equipped_spell(self, spell_list: list) -> Optional["Spell"]:
+        """v3.2: return the Spell slotted into the active staff/wand, or the
+        free-cast spell when can_cast_without_staff. Returns None if no spell
+        is castable in the current configuration."""
+        sid = (self.primary_spell_id if self.using_primary
+               else self.secondary_spell_id)
+        if not sid and self.can_cast_without_staff:
+            sid = self.selected_spell_id
+        if not sid:
+            return None
+        for s in spell_list:
+            if s.id == sid:
+                return s
+        return None
+
     def max_inventory_slots(self) -> int:
         af = self.active_form()
         if af is not None and af.inventory_slot_override is not None:
@@ -313,16 +342,34 @@ class EncounterInstance:
 
 @dataclass
 class Encounter:
-    # v3.1.1: encounter name is editable during the encounter
     name: str = "Untitled Encounter"
     instances: list[EncounterInstance] = field(default_factory=list)
+
+    # v3.2: multiple participants per side. The roster shows all not-yet-assigned
+    # instances; left/right_participant_ids are the ones placed on each side.
+    # Once `is_started` flips True, the roster disappears and the side pages
+    # show one currently-selected participant each (controlled by *_active_idx).
+    left_participant_ids: list[str] = field(default_factory=list)
+    right_participant_ids: list[str] = field(default_factory=list)
+    left_active_idx: int = 0
+    right_active_idx: int = 0
+    is_started: bool = False
+
+    # Legacy single-instance pointers (pre-v3.2). Kept for migration only;
+    # never set by new code.
     left_instance_id: Optional[str] = None
     right_instance_id: Optional[str] = None
+
     in_conflict_mode: bool = False
     left_atk_selection: str = "martial"
     right_atk_selection: str = "martial"
     left_is_receiver_only: bool = False
     right_is_receiver_only: bool = False
+
+    # Per-conflict items used by each side (instance_id -> list of item_ids
+    # used this conflict). Cleared when conflict ends.
+    items_used_left: list[str] = field(default_factory=list)
+    items_used_right: list[str] = field(default_factory=list)
 
 
 MODIFIER_DEFS: dict[str, tuple[float, bool, str]] = {
@@ -341,6 +388,14 @@ MODIFIER_DEFS: dict[str, tuple[float, bool, str]] = {
     "fall_damage_const":      (79.4883220537,  False, "Fall damage constant"),
     "sp_earned_scaling_base": (0.05,           False, "SP earned scaling base"),
     "sp_earned_scaling_factor": (0.05,         False, "SP earned scaling factor"),
+    # KP recommendation: rec_kp = (vitals_weight*vital_sum
+    #                              + prof_weight*total_sp
+    #                              + combat_weight*(max_atk + def_value))
+    #                              * global_mult
+    "kp_rec_vitals_weight":   (0.02,           False, "KP rec: weight on (HP_max+SP_max+MP_max)"),
+    "kp_rec_prof_weight":     (0.10,           False, "KP rec: weight on total SP"),
+    "kp_rec_combat_weight":   (0.05,           False, "KP rec: weight on (max ATK + DEF) at d10"),
+    "kp_rec_global_mult":     (1.0,            False, "KP rec: global multiplier"),
 }
 
 
