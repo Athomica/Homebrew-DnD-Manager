@@ -1,5 +1,32 @@
 # DnD Manager Changelog
 
+## v3.4.3 — Conflict-panel signal-leak fix
+
+Root cause of "QLabel has been deleted" crashes during conflict edits:
+the `ConflictPanel` connected to `state.character_changed` via an inline
+lambda that couldn't be disconnected. Each time the encounter tab
+refreshed (entering/exiting conflict, etc.) it built a new panel; the
+old one was removed from the layout but its lambda lingered, still
+connected. Any later `character_changed` (from a dice entry, a vital
+edit, a checkbox toggle, an equipment dropdown change) fired ALL leaked
+lambdas — and the dead ones tried to call `.setText` on QLabels that
+Qt had already deleted.
+
+Fix:
+- The handler is stored as `self._on_state_char_changed` so it's
+  disconnectable.
+- `ConflictPanel.cleanup()` disconnects from both `encounter_changed`
+  and `character_changed`. `EncounterTab._clear_layout` already calls
+  `cleanup()` on widgets that have it, so the disconnect now actually
+  happens before deletion.
+- `ConflictPanel.refresh()` got a belt-and-suspenders guard at the top
+  that bails out if the panel's QLabels are already dead, so a future
+  stray-handler bug degrades to a no-op instead of a crash.
+
+No schema change.
+
+---
+
 ## v3.4.2 — Conflict crash fixes (again) and new dodge formula
 
 ### Crashes

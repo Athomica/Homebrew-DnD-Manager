@@ -869,10 +869,29 @@ class ConflictPanel(QGroupBox):
         outer.addWidget(self._right_col["box"])
         outer.addStretch(1)
 
+        # v3.4.3: store the lambda as an attribute so cleanup() can
+        # disconnect it. Previously this was an inline lambda that couldn't
+        # be disconnected — each refresh of the encounter tab rebuilt the
+        # panel and the old lambda lingered, eventually firing on a
+        # destroyed widget tree and crashing with "QLabel has been deleted".
+        self._on_state_char_changed = lambda _cid: self.refresh()
         self._state.encounter_changed.connect(self.refresh)
-        self._state.character_changed.connect(lambda _cid: self.refresh())
+        self._state.character_changed.connect(self._on_state_char_changed)
         self.refresh()
         _fade_in(self)
+
+    def cleanup(self) -> None:
+        """Called by EncounterTab._clear_layout before this panel is removed
+        from the middle layout. Disconnects state signals so stale handlers
+        don't fire on destroyed QLabels."""
+        for sig, slot in (
+            (self._state.encounter_changed, self.refresh),
+            (self._state.character_changed, self._on_state_char_changed),
+        ):
+            try:
+                sig.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
 
     def _right_col_separator(self) -> QFrame:
         s = QFrame()
@@ -982,6 +1001,14 @@ class ConflictPanel(QGroupBox):
         their toggled handlers — this method never writes back."""
         enc = self._state.state.active_encounter
         if enc is None or not enc.in_conflict_mode:
+            return
+        # v3.4.3: belt-and-suspenders. If this panel was removed from the
+        # layout but its Python wrapper is still alive (e.g. a stale signal
+        # handler), the child widgets are gone and any setText would crash.
+        # cleanup() should disconnect us before deletion; this is a backup.
+        try:
+            self._left_col["name_lbl"].objectName()
+        except RuntimeError:
             return
         for side, col in (("left", self._left_col), ("right", self._right_col)):
             inst = self._state.active_instance(side)
