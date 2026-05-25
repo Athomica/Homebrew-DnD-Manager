@@ -617,7 +617,7 @@ class EncounterTab(QWidget):
         # Clear strip & bin & middle
         self._clear_layout(self._strip_layout, keep_widgets=(self._strip_empty,))
         self._clear_layout(self._bin_layout, keep_widgets=(self._bin_empty,))
-        self._clear_layout(self._middle_layout)
+        self._clear_layout(self._middle_layout, keep_widgets=(self._opponent_btn,))
 
         # Clear left & right (keep the empty placeholders)
         self._clear_layout(self._left_inner, keep_widgets=(self._left_empty,))
