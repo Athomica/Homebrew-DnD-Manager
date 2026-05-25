@@ -1,18 +1,41 @@
-"""Inline passive editor: shows a list of passives with add/remove/toggle."""
+"""Inline passive editor with affected_value dropdown (v3.1 Section 1.8)."""
 from __future__ import annotations
 
-from typing import Callable, Optional
-
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLineEdit, QDoubleSpinBox, QComboBox, QCheckBox, QLabel,
+    QPushButton, QLineEdit, QCheckBox, QLabel,
 )
 
-from models import Passive, new_id
+from models import Passive, passive_affected_options
+from ui.components.no_wheel_combo import (
+    NoWheelComboBox, NoWheelDoubleSpinBox,
+)
 
 
 DURATIONS = ("permanent", "manual")
+
+
+def build_affected_combo() -> NoWheelComboBox:
+    """Build a QComboBox with grouped headers for the Passive affected_value."""
+    cb = NoWheelComboBox()
+    model = QStandardItemModel(cb)
+    for group, items in passive_affected_options():
+        # Header (non-selectable)
+        header = QStandardItem(f"— {group} —")
+        header.setFlags(Qt.ItemFlag.NoItemFlags)
+        bold = QFont()
+        bold.setBold(True)
+        header.setFont(bold)
+        model.appendRow(header)
+        for v in items:
+            it = QStandardItem(v)
+            it.setData(v, Qt.ItemDataRole.UserRole)
+            model.appendRow(it)
+    cb.setModel(model)
+    cb.setCurrentIndex(1)  # first real option
+    return cb
 
 
 class PassiveListEditor(QWidget):
@@ -26,24 +49,23 @@ class PassiveListEditor(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(4)
+        outer.setSpacing(6)
 
         self._list = QListWidget()
         self._list.setAlternatingRowColors(True)
         self._list.currentRowChanged.connect(self._on_row_changed)
         outer.addWidget(self._list, 1)
 
-        # Edit row
         edit_row = QHBoxLayout()
+        edit_row.setSpacing(10)
         self._name = QLineEdit()
         self._name.setPlaceholderText("Name")
-        self._amount = QDoubleSpinBox()
+        self._amount = NoWheelDoubleSpinBox()
         self._amount.setRange(-10.0, 10.0)
         self._amount.setDecimals(2)
         self._amount.setSingleStep(0.05)
-        self._affected = QLineEdit()
-        self._affected.setPlaceholderText("affected (e.g. stealth_throw)")
-        self._duration = QComboBox()
+        self._affected = build_affected_combo()
+        self._duration = NoWheelComboBox()
         self._duration.addItems(DURATIONS)
         self._active = QCheckBox("active")
         self._active.setChecked(True)
@@ -58,8 +80,8 @@ class PassiveListEditor(QWidget):
         edit_row.addWidget(self._active)
         outer.addLayout(edit_row)
 
-        # Buttons row
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
         self._add_btn = QPushButton("+ Add")
         self._add_btn.setProperty("role", "primary")
         self._remove_btn = QPushButton("− Remove")
@@ -83,9 +105,21 @@ class PassiveListEditor(QWidget):
         self._list.clear()
         for p in self._passives:
             tag = "[on]" if p.active else "[off]"
-            txt = f"{tag} {p.name} ({p.amount:+.2f} on {p.affected_value or '?'}, {p.duration}, src={p.source})"
+            txt = (f"{tag} {p.name} ({p.amount:+.2f} on {p.affected_value or '?'}, "
+                   f"{p.duration}, src={p.source})")
             item = QListWidgetItem(txt)
             self._list.addItem(item)
+
+    def _select_affected(self, value: str) -> None:
+        # Find the index whose UserRole data matches
+        for i in range(self._affected.count()):
+            if self._affected.itemData(i) == value:
+                self._affected.setCurrentIndex(i)
+                return
+
+    def _current_affected_text(self) -> str:
+        data = self._affected.currentData()
+        return data if data else self._affected.currentText()
 
     def _on_row_changed(self, row: int) -> None:
         if row < 0 or row >= len(self._passives):
@@ -93,7 +127,7 @@ class PassiveListEditor(QWidget):
         p = self._passives[row]
         self._name.setText(p.name)
         self._amount.setValue(p.amount)
-        self._affected.setText(p.affected_value)
+        self._select_affected(p.affected_value)
         idx = DURATIONS.index(p.duration) if p.duration in DURATIONS else 0
         self._duration.setCurrentIndex(idx)
         self._active.setChecked(p.active)
@@ -101,7 +135,7 @@ class PassiveListEditor(QWidget):
     def _on_add(self) -> None:
         p = Passive(name=self._name.text() or "New Passive",
                     amount=self._amount.value(),
-                    affected_value=self._affected.text(),
+                    affected_value=self._current_affected_text(),
                     duration=self._duration.currentText(),
                     source=self._source_default,
                     active=self._active.isChecked())
@@ -125,7 +159,7 @@ class PassiveListEditor(QWidget):
         p = self._passives[row]
         p.name = self._name.text() or p.name
         p.amount = self._amount.value()
-        p.affected_value = self._affected.text()
+        p.affected_value = self._current_affected_text()
         p.duration = self._duration.currentText()
         p.active = self._active.isChecked()
         self._refresh_list()

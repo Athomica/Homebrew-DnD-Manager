@@ -1,4 +1,4 @@
-"""Data models for DnDManager v3. Pure dataclasses, no Qt imports."""
+"""Data models for DnDManager v3.1. Pure dataclasses, no Qt imports."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -40,7 +40,7 @@ class Weapon:
 class Armor:
     id: str = field(default_factory=lambda: new_id("a"))
     name: str = "New Armor"
-    slot: str = "helmet"  # helmet | chest | gloves | pants | boots
+    slot: str = "helmet"
     armor_value: int = 0
     armor_level: int = 1
     passives: list[Passive] = field(default_factory=list)
@@ -99,7 +99,6 @@ class InventoryEntry:
     notes: str = ""
 
 
-# Proficiency name list, in canonical order, grouped into attributes.
 PROFICIENCIES = (
     "armor", "martial",       # Strength
     "ranged", "stealth",      # Agility
@@ -119,15 +118,35 @@ ATTRIBUTES = {
 ARMOR_SLOTS = ("helmet", "chest", "gloves", "pants", "boots")
 
 
+# v3.1 - Passive affected_value dropdown options.
+def passive_affected_options() -> list[tuple[str, list[str]]]:
+    """Returns [(group_label, [values]), ...] for the dropdown."""
+    vitals = ["health", "health_max", "stamina", "stamina_max",
+              "mana", "mana_max"]
+    prof_attrs = ("throw", "dice_bonus", "sp")
+    profs: list[str] = []
+    for p in PROFICIENCIES:
+        for a in prof_attrs:
+            profs.append(f"{p}_{a}")
+    return [("Vitals", vitals), ("Proficiencies", profs)]
+
+
 @dataclass
 class Character:
     id: str = field(default_factory=lambda: new_id("c"))
     name: str = "New Character"
     role: str = "party"  # "party" | "mob" | "npc"
 
+    # v3.1: template vs unique
+    is_template: bool = False
+    is_deceased: bool = False  # only meaningful for unique characters
+
+    # v3.1: section collapse state persistence
+    section_collapsed: dict[str, bool] = field(default_factory=dict)
+
     # Identity
     race: str = ""
-    class_name: str = ""
+    class_name: str = ""  # v3.1: kept in data, no longer displayed
     gender: str = ""
     age: str = ""
     origin: str = ""
@@ -153,7 +172,7 @@ class Character:
     speech_sp: int = 1
     luck_sp: int = 1
 
-    # Vitals
+    # Vitals (templates only meaningfully use the _max fields)
     health_max: int = 100
     health_current: int = 100
     stamina_max: int = 100
@@ -167,7 +186,7 @@ class Character:
     # Combat state
     dmg_received: int = 0
     fall_height: int = 0
-    turns: int = 0
+    turns: int = 0  # v3.1: no longer used outside encounters
     last_hp_loss: float = 0.0
 
     # KP
@@ -175,7 +194,7 @@ class Character:
     solo_kp: int = 0
     participants: int = 1
 
-    # Equipment (ID refs to global lists)
+    # Equipment
     primary_weapon_id: Optional[str] = None
     secondary_weapon_id: Optional[str] = None
     shield_id: Optional[str] = None
@@ -190,7 +209,7 @@ class Character:
     spell_ids: list[str] = field(default_factory=list)
     selected_spell_id: Optional[str] = None
 
-    # Passives directly owned by character
+    # Passives
     passives: list[Passive] = field(default_factory=list)
 
     # Inventory
@@ -199,7 +218,7 @@ class Character:
     backpack_slots: int = 0
     gold: float = 0.0
 
-    # Shapeshifting (optional)
+    # Shapeshifting
     is_shapeshifter: bool = False
     forms: list[Form] = field(default_factory=list)
     active_form_id: Optional[str] = None
@@ -274,9 +293,74 @@ class Character:
         return total
 
 
+# ---------------------------------------------------------------------------
+# v3.1 Encounter model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EncounterInstance:
+    """A character copy living inside an encounter. Independent of the
+    Global Character List entry from the moment of copy."""
+    instance_id: str = field(default_factory=lambda: new_id("ei"))
+    source_character_id: str = ""
+    is_template_instance: bool = False
+    character: Optional[Character] = None
+    turn: int = 0
+    is_in_bin: bool = False
+    dice_history: list[int] = field(default_factory=list)  # last N dice values
+
+
+@dataclass
+class Encounter:
+    instances: list[EncounterInstance] = field(default_factory=list)
+    left_instance_id: Optional[str] = None
+    right_instance_id: Optional[str] = None
+    in_conflict_mode: bool = False
+    left_atk_selection: str = "martial"
+    right_atk_selection: str = "martial"
+    left_is_receiver_only: bool = False
+    right_is_receiver_only: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Scaling Modifier definitions (v3.1 Part 3)
+# ---------------------------------------------------------------------------
+
+# Each entry: (default_value, is_integer, human_label)
+MODIFIER_DEFS: dict[str, tuple[float, bool, str]] = {
+    "tier1_mult":             (0.2,            False, "Dice bonus tier 1 multiplier"),
+    "tier1_mult_luck":        (0.1,            False, "Dice bonus tier 1 multiplier (Luck)"),
+    "tier2_mult":             (0.05,           False, "Dice bonus tier 2 multiplier"),
+    "tier3_mult":             (0.025,          False, "Dice bonus tier 3 multiplier"),
+    "tier4_mult":             (0.05,           False, "Dice bonus tier 4 multiplier"),
+    "tier1_cap":              (15,             True,  "Tier 1 SP cap (soft)"),
+    "tier2_cap":              (51,             True,  "Tier 2 SP cap (medium)"),
+    "tier3_cap":              (189,            True,  "Tier 3 SP cap (hard)"),
+    "luck_divisor_base":      (27,             True,  "Luck divisor base"),
+    "luck_divisor_floor":     (14,             True,  "Luck divisor floor"),
+    "vital_max_base":         (250,            True,  "Vital max base"),
+    "vital_max_per_level":    (50,             True,  "Vital max per level"),
+    "fall_damage_const":      (79.4883220537,  False, "Fall damage constant"),
+    "sp_earned_scaling_base": (0.05,           False, "SP earned scaling base"),
+    "sp_earned_scaling_factor": (0.05,         False, "SP earned scaling factor"),
+}
+
+
+def modifier_step(modifier_key: str, granularity: int) -> float:
+    """Returns the +/- step for a modifier at the given granularity (0..5)."""
+    if granularity <= 0:
+        return 0
+    default, is_int, _ = MODIFIER_DEFS[modifier_key]
+    if is_int:
+        steps = {1: 1, 2: 5, 3: 10, 4: 25, 5: 100}
+        return float(steps.get(granularity, 1))
+    pcts = {1: 0.005, 2: 0.02, 3: 0.05, 4: 0.10, 5: 0.25}
+    return default * pcts.get(granularity, 0.005)
+
+
 @dataclass
 class AppState:
-    schema_version: int = 3
+    schema_version: int = 4  # v3.1
     campaign_name: str = ""
     session_number: int = 1
     campaign_notes: str = ""
@@ -287,9 +371,19 @@ class AppState:
     items: list[Item] = field(default_factory=list)
 
     party: list[Character] = field(default_factory=list)
-    encounters: list[Character] = field(default_factory=list)
+    mobs: list[Character] = field(default_factory=list)  # renamed from encounters
     npcs: list[Character] = field(default_factory=list)
 
     total_turns: int = 0
     change_log: list[dict] = field(default_factory=list)
     combat_log: list[dict] = field(default_factory=list)
+
+    # v3.1: scaling modifiers (offsets from defaults) and granularity
+    scaling_modifiers: dict[str, float] = field(default_factory=dict)
+    scaling_granularity: dict[str, int] = field(default_factory=dict)
+
+    # v3.1: active encounter (None when no encounter is running)
+    active_encounter: Optional[Encounter] = None
+
+    # v3.1: developer view toggle
+    developer_view: bool = False

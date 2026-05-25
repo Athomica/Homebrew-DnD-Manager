@@ -1,8 +1,7 @@
-"""Theme and stylesheet for DnDManager v3.
+"""Theme and stylesheet for DnDManager v3.1.
 
-Implements Section 11 of the project brief. The palette is exact - do not
-substitute or shift hues. Accents are used only for structural emphasis,
-danger, and depth; vital bars use dedicated colors.
+v3.1 Section 1.1: more generous spacing throughout. Sections breathe;
+nothing should feel like a spreadsheet.
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ COLORS = {
     "text":        "#fafafa",
     "text_dim":    "#888888",
 
-    # Accents (used sparingly)
+    # Accents
     "accent_gold": "#aa8f66",
     "accent_red":  "#f72c25",
     "accent_wine": "#471323",
@@ -53,16 +52,16 @@ def build_stylesheet() -> str:
             background-color: {c['bg_section']};
             border: 1px solid {c['border']};
             border-radius: 6px;
-            margin-top: 14px;
-            padding: 12px 8px 8px 8px;
+            margin-top: 18px;
+            padding: 16px 12px 12px 12px;
             font-weight: bold;
         }}
         QGroupBox::title {{
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            left: 10px;
+            left: 12px;
             top: -2px;
-            padding: 0 6px;
+            padding: 0 8px;
             color: {c['accent_gold']};
             font-size: 15px;
             font-weight: bold;
@@ -106,7 +105,7 @@ def build_stylesheet() -> str:
             color: {c['text']};
             border: 1px solid {c['border']};
             border-radius: 4px;
-            padding: 4px 6px;
+            padding: 5px 8px;
             selection-background-color: {c['accent_wine']};
         }}
         QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
@@ -118,12 +117,13 @@ def build_stylesheet() -> str:
             color: {c['text']};
             border: 1px solid {c['border']};
             selection-background-color: {c['accent_wine']};
+            padding: 4px;
         }}
         QSpinBox::up-button, QSpinBox::down-button,
         QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
             background-color: {c['bg_section']};
             border: none;
-            width: 14px;
+            width: 16px;
         }}
 
         QPushButton {{
@@ -131,13 +131,16 @@ def build_stylesheet() -> str:
             color: {c['text']};
             border: 1px solid {c['border']};
             border-radius: 4px;
-            padding: 5px 12px;
+            padding: 6px 14px;
         }}
         QPushButton:hover {{
             background-color: {c['bg_raised']};
         }}
         QPushButton:pressed {{
             background-color: {c['bg_base']};
+        }}
+        QPushButton:disabled {{
+            color: {c['text_dim']};
         }}
         QPushButton[role="danger"] {{
             background-color: {c['accent_red']};
@@ -162,6 +165,9 @@ def build_stylesheet() -> str:
             border-radius: 4px;
             alternate-background-color: {c['bg_section']};
         }}
+        QListWidget::item, QTreeWidget::item, QTableWidget::item {{
+            padding: 4px;
+        }}
         QListWidget::item:selected, QTreeWidget::item:selected,
         QTableWidget::item:selected {{
             background-color: {c['accent_wine']};
@@ -171,7 +177,7 @@ def build_stylesheet() -> str:
             background-color: {c['bg_section']};
             color: {c['accent_gold']};
             border: 1px solid {c['border']};
-            padding: 4px;
+            padding: 6px;
             font-weight: bold;
         }}
 
@@ -184,7 +190,7 @@ def build_stylesheet() -> str:
         QTabBar::tab {{
             background-color: {c['bg_base']};
             color: {c['text_dim']};
-            padding: 6px 14px;
+            padding: 8px 16px;
             margin-right: 2px;
             border-top-left-radius: 4px;
             border-top-right-radius: 4px;
@@ -205,7 +211,7 @@ def build_stylesheet() -> str:
             border-radius: 4px;
             text-align: center;
             color: {c['text']};
-            height: 18px;
+            height: 22px;
         }}
         QProgressBar[vital="hp"]::chunk {{
             background-color: {c['vital_hp']};
@@ -255,13 +261,16 @@ def build_stylesheet() -> str:
             background-color: {c['bg_section']};
             color: {c['text']};
             border: 1px solid {c['accent_gold']};
-            padding: 4px;
+            padding: 6px;
         }}
 
         QMenuBar {{
             background-color: {c['bg_base']};
             color: {c['text']};
             border-bottom: 1px solid {c['border']};
+        }}
+        QMenuBar::item {{
+            padding: 6px 12px;
         }}
         QMenuBar::item:selected {{
             background-color: {c['bg_raised']};
@@ -270,6 +279,10 @@ def build_stylesheet() -> str:
             background-color: {c['bg_section']};
             color: {c['text']};
             border: 1px solid {c['border']};
+            padding: 4px;
+        }}
+        QMenu::item {{
+            padding: 6px 20px;
         }}
         QMenu::item:selected {{
             background-color: {c['accent_wine']};
@@ -284,11 +297,11 @@ def build_stylesheet() -> str:
         }}
 
         QCheckBox {{
-            spacing: 6px;
+            spacing: 8px;
         }}
         QCheckBox::indicator {{
-            width: 14px;
-            height: 14px;
+            width: 16px;
+            height: 16px;
             border: 1px solid {c['border']};
             background-color: {c['bg_base']};
             border-radius: 3px;
@@ -297,11 +310,35 @@ def build_stylesheet() -> str:
             background-color: {c['accent_wine']};
             border: 1px solid {c['accent_gold']};
         }}
+        QRadioButton {{
+            spacing: 8px;
+        }}
+        QRadioButton::indicator {{
+            width: 16px;
+            height: 16px;
+            border: 1px solid {c['border']};
+            background-color: {c['bg_base']};
+            border-radius: 8px;
+        }}
+        QRadioButton::indicator:checked {{
+            background-color: {c['accent_wine']};
+            border: 1px solid {c['accent_gold']};
+        }}
 
         QStatusBar {{
             background-color: {c['bg_section']};
             color: {c['text_dim']};
             border-top: 1px solid {c['border']};
+        }}
+
+        QDockWidget {{
+            color: {c['text']};
+        }}
+        QDockWidget::title {{
+            background-color: {c['bg_section']};
+            color: {c['accent_gold']};
+            padding: 6px;
+            font-weight: bold;
         }}
     """
 

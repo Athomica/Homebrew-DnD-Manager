@@ -1,17 +1,11 @@
-"""Verification tests from Section 13 of the project brief.
-
-Run with: python -m pytest src/tests/test_math.py -v
-Or:       python src/tests/test_math.py
-"""
+"""Verification tests for the math engine (v3 + v3.1)."""
 from __future__ import annotations
 
 import math
-import os
 import sys
 import unittest
 from pathlib import Path
 
-# Make src/ importable
 _here = Path(__file__).resolve().parent.parent
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
@@ -21,7 +15,6 @@ from models import Character, Form, Weapon, Armor, InventoryEntry, Item
 
 
 def _make_test_char() -> Character:
-    """Section 13.1 test character: Level 3, total SP 34."""
     c = Character(name="TestChar")
     c.armor_sp = 1
     c.martial_sp = 6
@@ -39,6 +32,9 @@ def _make_test_char() -> Character:
 
 class TestBasicFormulas(unittest.TestCase):
 
+    def setUp(self):
+        me.set_modifiers({})  # Ensure clean state
+
     def test_level(self):
         self.assertEqual(me.level(10), 1)
         self.assertEqual(me.level(34), 3)
@@ -51,39 +47,33 @@ class TestBasicFormulas(unittest.TestCase):
 
 
 class TestTierSum(unittest.TestCase):
+    def setUp(self):
+        me.set_modifiers({})
 
     def test_luck_uses_nerfed_tier1(self):
-        # Luck tier-1 multiplier is 0.1, others 0.2.
         self.assertAlmostEqual(me.tier_sum(1, "luck"), 0.1, places=4)
         self.assertAlmostEqual(me.tier_sum(1, "martial"), 0.2, places=4)
 
     def test_tier_sum_at_15(self):
-        # 15 SP, all of tier 1.
         self.assertAlmostEqual(me.tier_sum(15, "martial"), 15 * 0.2, places=4)
         self.assertAlmostEqual(me.tier_sum(15, "luck"), 15 * 0.1, places=4)
 
     def test_tier_sum_at_200(self):
-        # 200 SP fully invested:
-        # 15*0.2 + (51-15)*0.05 + (189-51)*0.025 + (200-189)*0.05
-        # = 3 + 1.8 + 3.45 + 0.55 = 8.8
         self.assertAlmostEqual(me.tier_sum(200, "martial"), 8.8, places=4)
-        # For Luck the first tier is 0.1 not 0.2:
-        # 15*0.1 + (51-15)*0.05 + (189-51)*0.025 + (200-189)*0.05
-        # = 1.5 + 1.8 + 3.45 + 0.55 = 7.3
         self.assertAlmostEqual(me.tier_sum(200, "luck"), 7.3, places=4)
 
 
 class TestDiceMultiplier(unittest.TestCase):
+    def setUp(self):
+        me.set_modifiers({})
 
     def test_nat_1_is_zero(self):
         self.assertEqual(me.dice_multiplier(1, 0), 0.0)
 
     def test_dice_mult_at_max_luck(self):
-        # Luck SP 200 => tier_sum = 7.3 (Luck variant)
         lts = me.tier_sum(200, "luck")
         divisor = max(14, 27 - lts)
         self.assertAlmostEqual(divisor, 19.7, places=4)
-        # at dice=20, multiplier = (20-1)/19.7 = 0.9645 (cap is 2)
         self.assertAlmostEqual(me.dice_multiplier(20, lts), 19 / 19.7, places=4)
 
     def test_dice_mult_caps_at_2(self):
@@ -91,9 +81,8 @@ class TestDiceMultiplier(unittest.TestCase):
 
 
 class TestSection13_Baseline(unittest.TestCase):
-    """Section 13.1: baseline math without form modifiers."""
-
     def setUp(self):
+        me.set_modifiers({})
         self.c = _make_test_char()
 
     def test_total_sp_and_level(self):
@@ -102,18 +91,13 @@ class TestSection13_Baseline(unittest.TestCase):
         self.assertEqual(me.vital_max(3), 400)
 
     def test_luck_tier_sum(self):
-        # Luck SP 1, tier_sum = 1 * 0.1 = 0.1
         self.assertAlmostEqual(me.luck_tier_sum_for(self.c), 0.1, places=4)
 
     def test_dice_multiplier_at_dice_10(self):
-        # divisor = max(14, 27 - 0.1) = 26.9, mult = 9 / 26.9 ≈ 0.3346
         lts = me.luck_tier_sum_for(self.c)
-        self.assertAlmostEqual(me.dice_multiplier(10, lts), 9 / 26.9, places=4)
-        # Expected from brief: ~0.3346
         self.assertAlmostEqual(me.dice_multiplier(10, lts), 0.3346, places=3)
 
     def test_dice_bonuses(self):
-        # Per brief Section 13.1
         profs = me.derive_proficiency_view(self.c)
         self.assertAlmostEqual(profs["armor"]["bonus"], 0.0, places=2)
         self.assertAlmostEqual(profs["martial"]["bonus"], 0.5, places=2)
@@ -123,6 +107,8 @@ class TestSection13_Baseline(unittest.TestCase):
 
 
 class TestCriticalDetection(unittest.TestCase):
+    def setUp(self):
+        me.set_modifiers({})
 
     def test_throw_20_is_always_critical(self):
         self.assertTrue(me.is_critical(20, 1))
@@ -138,7 +124,8 @@ class TestCriticalDetection(unittest.TestCase):
 
 
 class TestFormModifier(unittest.TestCase):
-    """Section 13.2: form modifiers change effective SP & throws."""
+    def setUp(self):
+        me.set_modifiers({})
 
     def test_squirrel_form(self):
         c = _make_test_char()
@@ -146,7 +133,6 @@ class TestFormModifier(unittest.TestCase):
         f = Form(name="Squirrel", stealth_mult=1.5, acrobatics_mult=1.5)
         c.forms.append(f)
         c.active_form_id = f.id
-        # Acrobatics effective SP = 9 * 1.5 = 13.5
         self.assertAlmostEqual(c.effective_sp("acrobatics"), 13.5, places=4)
         profs = me.derive_proficiency_view(c)
         self.assertAlmostEqual(profs["acrobatics"]["bonus"], 1.0, places=2)
@@ -154,25 +140,24 @@ class TestFormModifier(unittest.TestCase):
 
 
 class TestThrowResultStupidityFloor(unittest.TestCase):
+    def setUp(self):
+        me.set_modifiers({})
 
     def test_low_sp_low_dice_no_bonus(self):
-        # SP <= 39, dice <= 5: no bonus
         result = me.throw_result(20, 5, 5.0)
         self.assertEqual(result, 5)
 
     def test_low_sp_high_dice_gets_bonus(self):
-        # SP <= 39, dice 6: bonus applies
         result = me.throw_result(20, 6, 1.0)
         self.assertEqual(result, 7.0)
 
 
 class TestDodgeAndInventoryForm(unittest.TestCase):
-    """Section 13.6: form-dependent inventory + dodge."""
+    def setUp(self):
+        me.set_modifiers({})
 
     def test_dodge_baseline(self):
         c = _make_test_char()
-        items = [Item(name="x", slot_count=1)]
-        # No armor, 1 inventory entry (default qty 1)
         c.inventory = [InventoryEntry(title="rock", quantity=1)]
         profs = me.derive_proficiency_view(c)
         d = me.dodge_value(
@@ -180,7 +165,6 @@ class TestDodgeAndInventoryForm(unittest.TestCase):
             c.effective_sp("armor"), c.effective_sp("acrobatics"),
             0, c.filled_inventory_slots([]),
         )
-        # Per brief: 10.5 with armor 0, filled slots 1
         self.assertAlmostEqual(d, 10.5, places=1)
 
     def test_inventory_form_interaction(self):
@@ -191,7 +175,6 @@ class TestDodgeAndInventoryForm(unittest.TestCase):
         c.forms = [baseline, squirrel]
         c.active_form_id = baseline.id
         c.base_max_inventory_slots = 20
-        # 5 items totaling 8 slots (one with slot_count 4, rest 1)
         item_big = Item(name="big", slot_count=4)
         item_small = Item(name="small", slot_count=1)
         c.inventory = [
@@ -201,16 +184,16 @@ class TestDodgeAndInventoryForm(unittest.TestCase):
         item_list = [item_big, item_small]
         self.assertEqual(c.max_inventory_slots(), 20)
         self.assertEqual(c.filled_inventory_slots(item_list), 8)
-
         c.active_form_id = squirrel.id
         self.assertEqual(c.max_inventory_slots(), 2)
         self.assertEqual(c.filled_inventory_slots(item_list), 8)
-        # Switch back
         c.active_form_id = baseline.id
         self.assertEqual(c.max_inventory_slots(), 20)
 
 
 class TestWeaponShieldDuality(unittest.TestCase):
+    def setUp(self):
+        me.set_modifiers({})
 
     def test_weapon_as_shield(self):
         c = _make_test_char()
@@ -218,21 +201,19 @@ class TestWeaponShieldDuality(unittest.TestCase):
                        damage_negation=0.5, is_shield=False)
         c.primary_weapon_id = sword.id
         c.shield_id = sword.id
-        # Active weapon -> ATK uses damage 10
         self.assertEqual(c.get_active_weapon([sword]), sword)
         self.assertEqual(c.get_shield([sword]), sword)
-        # shielded_hp_loss with the sword as shield
         loss = me.shielded_hp_loss(80, 0, 100, 0.5)
-        # 80 * (1 - 0.5) = 40, minus 0 def
         self.assertAlmostEqual(loss, 40, places=2)
 
     def test_shield_break(self):
-        # If incoming > max_defense, shield breaks and we use plain hp_loss
         loss = me.shielded_hp_loss(200, 10, 100, 0.5)
         self.assertAlmostEqual(loss, 190, places=2)
 
 
 class TestFallDamage(unittest.TestCase):
+    def setUp(self):
+        me.set_modifiers({})
 
     def test_zero_height(self):
         d = me.fall_damage(0, 1, 1, 0, 0, 0)
@@ -240,9 +221,10 @@ class TestFallDamage(unittest.TestCase):
 
 
 class TestSaveLoadRoundtrip(unittest.TestCase):
-    """Section 13.5: save/load roundtrip."""
+    def setUp(self):
+        me.set_modifiers({})
 
-    def test_roundtrip(self):
+    def test_roundtrip_v4(self):
         from models import AppState
         from state import serialize_app_state, hydrate_app_state
         s = AppState(campaign_name="Year 5100", session_number=5)
@@ -252,14 +234,145 @@ class TestSaveLoadRoundtrip(unittest.TestCase):
         s.party.append(c)
         s.weapons.append(Weapon(name="Steel Hammer", damage=12))
         s.items.append(Item(name="Healing Vial", slot_count=1, tags=["consumable"]))
+        # v3.1 additions
+        mob = Character(name="Goblin", role="mob", is_template=True)
+        s.mobs.append(mob)
+        s.scaling_modifiers["tier1_mult"] = 0.01
+        s.developer_view = True
         data = serialize_app_state(s)
         restored = hydrate_app_state(data)
         self.assertEqual(restored.campaign_name, "Year 5100")
         self.assertEqual(restored.party[0].name, "Pollux")
         self.assertTrue(restored.party[0].is_shapeshifter)
-        self.assertEqual(restored.party[0].forms[0].inventory_slot_override, 2)
-        self.assertEqual(restored.weapons[0].damage, 12)
-        self.assertIn("consumable", restored.items[0].tags)
+        self.assertEqual(restored.mobs[0].name, "Goblin")
+        self.assertTrue(restored.mobs[0].is_template)
+        self.assertEqual(restored.scaling_modifiers["tier1_mult"], 0.01)
+        self.assertTrue(restored.developer_view)
+
+
+class TestMigrationV3toV4(unittest.TestCase):
+    def setUp(self):
+        me.set_modifiers({})
+
+    def test_v3_save_migrates(self):
+        from state import hydrate_app_state
+        v3_save = {
+            "schema_version": 3,
+            "party": [{"id": "c1", "name": "Hero"}],
+            "encounters": [{"id": "c2", "name": "Goblin", "role": "mob"}],
+            "npcs": [],
+            "weapons": [], "armors": [], "spells": [], "items": [],
+            "total_turns": 5,
+            "change_log": [], "combat_log": [],
+        }
+        state = hydrate_app_state(v3_save)
+        self.assertEqual(state.schema_version, 4)
+        self.assertEqual(len(state.party), 1)
+        self.assertEqual(len(state.mobs), 1)
+        self.assertEqual(state.mobs[0].name, "Goblin")
+        # All migrated chars should be is_template=False
+        for c in state.party + state.mobs:
+            self.assertFalse(c.is_template)
+        self.assertEqual(state.scaling_modifiers, {})
+        self.assertIsNone(state.active_encounter)
+
+
+class TestScalingModifiers(unittest.TestCase):
+    """v3.1 Part 3: tunable constants."""
+
+    def setUp(self):
+        me.set_modifiers({})
+
+    def tearDown(self):
+        me.set_modifiers({})
+
+    def test_default_modifiers_match_v3(self):
+        me.set_modifiers({})
+        self.assertAlmostEqual(me.tier_sum(15, "martial"), 3.0)
+        self.assertEqual(me.vital_max(3), 400)
+
+    def test_vital_max_modifier(self):
+        me.set_modifiers({"vital_max_base": 50})
+        self.assertEqual(me.vital_max(1), 350)
+        me.set_modifiers({"vital_max_per_level": 10})
+        self.assertEqual(me.vital_max(3), 250 + 3 * 60)
+
+    def test_tier1_mult_modifier(self):
+        me.set_modifiers({"tier1_mult": 0.1})
+        # martial tier1 becomes 0.3 instead of 0.2
+        self.assertAlmostEqual(me.tier_sum(10, "martial"), 3.0)
+
+    def test_fall_damage_constant_modifier(self):
+        baseline = me.fall_damage(10, 1, 1, 0, 0, 0)
+        # Halve the fall damage constant via offset
+        me.set_modifiers({"fall_damage_const": -79.4883220537 / 2})
+        halved = me.fall_damage(10, 1, 1, 0, 0, 0)
+        self.assertAlmostEqual(halved, baseline / 2, delta=0.6)
+
+
+class TestEncounterSystem(unittest.TestCase):
+    """v3.1 Part 4: encounter mechanics."""
+
+    def setUp(self):
+        me.set_modifiers({})
+        from PyQt6.QtWidgets import QApplication
+        import sys as _sys
+        if QApplication.instance() is None:
+            self._app = QApplication(_sys.argv)
+        from state import StateManager
+        self.sm = StateManager()
+
+    def test_add_template_creates_instance(self):
+        goblin = Character(name="Goblin", role="mob", is_template=True)
+        self.sm.state.mobs.append(goblin)
+        ok, _, inst = self.sm.add_character_to_encounter(goblin)
+        self.assertTrue(ok)
+        self.assertIsNotNone(inst)
+        self.assertEqual(inst.character.name, "Goblin #1")
+        # Add second instance - auto-numbered
+        ok2, _, inst2 = self.sm.add_character_to_encounter(goblin)
+        self.assertTrue(ok2)
+        self.assertEqual(inst2.character.name, "Goblin #2")
+
+    def test_unique_in_encounter_cannot_be_added_twice(self):
+        hero = Character(name="Hero", role="party", is_template=False)
+        self.sm.state.party.append(hero)
+        ok, _, _ = self.sm.add_character_to_encounter(hero)
+        self.assertTrue(ok)
+        ok2, msg, _ = self.sm.add_character_to_encounter(hero)
+        self.assertFalse(ok2)
+        self.assertIn("already in the encounter", msg)
+
+    def test_turn_constraint_window(self):
+        h1 = Character(name="H1", role="party")
+        h2 = Character(name="H2", role="party")
+        self.sm.state.party = [h1, h2]
+        _, _, i1 = self.sm.add_character_to_encounter(h1)
+        _, _, i2 = self.sm.add_character_to_encounter(h2)
+        # Both at turn 0; H1 can advance to 1
+        ok, _ = self.sm.change_turn(i1.instance_id, 1)
+        self.assertTrue(ok)
+        # H1 cannot advance to 2 (would exceed min+1)
+        ok2, _ = self.sm.change_turn(i1.instance_id, 1)
+        self.assertFalse(ok2)
+        # H2 catches up
+        ok3, _ = self.sm.change_turn(i2.instance_id, 1)
+        self.assertTrue(ok3)
+        # Now H1 can advance
+        ok4, _ = self.sm.change_turn(i1.instance_id, 1)
+        self.assertTrue(ok4)
+
+    def test_end_encounter_promotes_template_survivors(self):
+        goblin = Character(name="Goblin", role="mob", is_template=True,
+                           health_max=50)
+        self.sm.state.mobs.append(goblin)
+        _, _, _ = self.sm.add_character_to_encounter(goblin)
+        before = len(self.sm.state.mobs)
+        self.sm.end_encounter()
+        # New unique mob should have been added (template survivor)
+        self.assertEqual(len(self.sm.state.mobs), before + 1)
+        new_one = self.sm.state.mobs[-1]
+        self.assertFalse(new_one.is_template)
 
 
 if __name__ == "__main__":

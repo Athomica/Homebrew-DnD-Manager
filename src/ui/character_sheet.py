@@ -1,43 +1,48 @@
-"""Character sheet widget. Used by party, encounter, and NPC tabs.
+"""Character sheet widget (v3.1).
 
-Sections (top to bottom):
-- Header strip: name, race, class, gender, age, origin, active form, delete, turn counter
-- Battle statistics: HP/Stam/Mana bars and KP fields
-- Level + DICE
-- Proficiencies grid
-- Combat resolution (DEF/ATK/dodge/fall/HP loss)
-- Throw Results (collapsible)
+Top-down sections, all collapsible with per-character persistence:
+- Header (no Class field; no Turn counter outside encounters)
+- Vitals (separate from Battle Statistics)
+- Battle Statistics (KP, SP-earned calculator)
+- Level / Dice
+- Proficiencies (Dice Bonus column hidden in DM view)
+- Combat Resolution
+- Throw Results
 - Weapons
 - Spells
-- Armor Equipment
+- Armor
 - Passives
 - Inventory
-- Forms (shapeshifters)
-- General Info (collapsible)
-- NPC fields (if role == npc)
+- Forms (non-NPC only)
+- NPC fields (NPC only)
+- General Info
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QListWidget, QListWidgetItem,
-    QSizePolicy, QFormLayout, QPlainTextEdit, QMessageBox, QInputDialog,
-    QAbstractSpinBox,
+    QLineEdit, QCheckBox, QPushButton, QTableWidget,
+    QTableWidgetItem, QHeaderView, QListWidget, QListWidgetItem,
+    QSizePolicy, QFormLayout, QPlainTextEdit, QMessageBox, QFrame,
 )
+from PyQt6.QtGui import QFont, QBrush, QColor
 
 import math_engine as me
 from models import (
-    Character, Weapon, Armor, Spell, Item, Form, InventoryEntry, Passive,
-    PROFICIENCIES, ATTRIBUTES, ARMOR_SLOTS, new_id,
+    Character, Form, InventoryEntry,
+    PROFICIENCIES, ATTRIBUTES, ARMOR_SLOTS,
 )
 from state import StateManager
 from ui.components.collapsible import CollapsibleSection
 from ui.components.vital_bar import VitalBar
 from ui.components.passive_editor import PassiveListEditor
+from ui.components.no_wheel_combo import (
+    NoWheelComboBox, NoWheelSpinBox, NoWheelDoubleSpinBox,
+)
+from ui.components.resizable import Resizable
 
 
 PROF_LABELS = {
@@ -55,42 +60,89 @@ PROF_LABELS = {
 
 
 class CharacterSheet(QWidget):
+    """Full character sheet for the Global Character List.
+
+    `compact_encounter_mode=False` is the global view (default).
+    Set to True for the encounter card variant (slimmer; see encounter_tab.py).
+    """
+
     def __init__(self, state: StateManager, character: Character,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None,
+                 locked: bool = False) -> None:
         super().__init__(parent)
         self._state = state
         self._char = character
-        self._suspend = False  # guard during programmatic widget updates
+        self._locked = locked
+        self._suspend = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(12)
+        outer.setSpacing(20)
 
-        outer.addWidget(self._build_header())
-        outer.addWidget(self._build_vitals_and_kp())
-        outer.addWidget(self._build_level_dice())
-        outer.addWidget(self._build_proficiencies())
-        outer.addWidget(self._build_combat_resolution())
-        outer.addWidget(self._build_throw_results())
-        outer.addWidget(self._build_weapons())
-        outer.addWidget(self._build_spells())
-        outer.addWidget(self._build_armor())
-        outer.addWidget(self._build_passives())
-        outer.addWidget(self._build_inventory())
+        # Lock banner shown when this character is in an active encounter
+        self._lock_banner = QLabel(
+            "Locked: in active encounter. Edit in the Encounters tab or end the encounter."
+        )
+        self._lock_banner.setProperty("role", "warning")
+        self._lock_banner.setStyleSheet(
+            "background-color: #471323; color: white; padding: 8px; border-radius: 4px;"
+        )
+        self._lock_banner.setVisible(False)
+        outer.addWidget(self._lock_banner)
+
+        # Header strip
+        outer.addWidget(self._build_header_strip())
+
+        # Collapsible sections (all of them)
+        self._sections: dict[str, CollapsibleSection] = {}
+
+        def add_section(key: str, title: str, builder, default_open: bool = True):
+            init_collapsed = self._state.get_section_collapsed(
+                self._char, key, default=not default_open)
+            sect = CollapsibleSection(
+                title, starts_open=not init_collapsed,
+                on_toggled=lambda collapsed, k=key: self._state.set_section_collapsed(
+                    self._char, k, collapsed),
+            )
+            content = builder()
+            if content is not None:
+                sect.add(content)
+            self._sections[key] = sect
+            outer.addWidget(sect)
+
+        add_section("Vitals", "Vitals", self._build_vitals_section)
+        add_section("Battle Statistics", "Battle Statistics", self._build_battle_stats_section)
+        add_section("Level / Dice", "Level / Dice", self._build_level_dice_section)
+        add_section("Proficiencies", "Proficiencies", self._build_proficiencies_section)
+        add_section("Combat Resolution", "Combat Resolution", self._build_combat_resolution_section)
+        add_section("Throw Results", "Throw Results", self._build_throw_results_section,
+                    default_open=False)
+        add_section("Weapons", "Weapons", self._build_weapons_section)
+        add_section("Spells", "Spells", self._build_spells_section)
+        add_section("Armor", "Armor Equipment", self._build_armor_section)
+        add_section("Passives", "Passives", self._build_passives_section)
+        add_section("Inventory", "Inventory", self._build_inventory_section)
         if self._char.role != "npc":
-            outer.addWidget(self._build_forms())
+            add_section("Forms", "Forms", self._build_forms_section, default_open=False)
         if self._char.role == "npc":
-            outer.addWidget(self._build_npc_section())
-        outer.addWidget(self._build_general_info())
+            add_section("NPC", "NPC Fields", self._build_npc_section)
+        add_section("General Info", "General Info / Notes",
+                    self._build_general_info_section, default_open=False)
+
         outer.addStretch(1)
 
         self._state.lists_changed.connect(self._refresh_lookup_dropdowns)
         self._state.character_changed.connect(self._on_external_char_changed)
+        self._state.view_mode_changed.connect(self._apply_view_mode)
+        self._state.encounter_changed.connect(self._refresh_lock_state)
+        self._state.modifiers_changed.connect(self.refresh_derived)
 
         self.refresh_all()
+        self._apply_view_mode()
+        self._refresh_lock_state()
 
     # ------------------------------------------------------------------
-    # Helpers
+    # External signal handlers
     # ------------------------------------------------------------------
     def _on_external_char_changed(self, cid: str) -> None:
         if cid == self._char.id:
@@ -102,19 +154,26 @@ class CharacterSheet(QWidget):
         self._state.set_character_field(self._char, field, value)
         self.refresh_derived()
 
+    def _refresh_lock_state(self) -> None:
+        in_enc = (not self._locked and
+                  self._state.is_character_in_encounter(self._char.id))
+        self._lock_banner.setVisible(in_enc)
+        # Disable all input widgets when locked
+        for s in self._sections.values():
+            s.setDisabled(in_enc)
+
     # ------------------------------------------------------------------
     # Header strip
     # ------------------------------------------------------------------
-    def _build_header(self) -> QWidget:
+    def _build_header_strip(self) -> QWidget:
         box = QGroupBox("Character")
         grid = QGridLayout(box)
-        grid.setContentsMargins(10, 14, 10, 10)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
+        grid.setContentsMargins(12, 18, 12, 12)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
 
         self._name_in = QLineEdit(self._char.name)
         self._race_in = QLineEdit(self._char.race)
-        self._class_in = QLineEdit(self._char.class_name)
         self._gender_in = QLineEdit(self._char.gender)
         self._age_in = QLineEdit(self._char.age)
         self._origin_in = QLineEdit(self._char.origin)
@@ -122,54 +181,80 @@ class CharacterSheet(QWidget):
         for w, attr in (
             (self._name_in, "name"),
             (self._race_in, "race"),
-            (self._class_in, "class_name"),
             (self._gender_in, "gender"),
             (self._age_in, "age"),
             (self._origin_in, "origin"),
         ):
             w.editingFinished.connect(lambda a=attr, w=w: self._set_field(a, w.text()))
 
+        # v3.1 1.5: Class field removed from display
+
         grid.addWidget(QLabel("Name:"), 0, 0)
         grid.addWidget(self._name_in, 0, 1, 1, 3)
         grid.addWidget(QLabel("Race:"), 1, 0)
         grid.addWidget(self._race_in, 1, 1)
-        grid.addWidget(QLabel("Class:"), 1, 2)
-        grid.addWidget(self._class_in, 1, 3)
+        grid.addWidget(QLabel("Origin:"), 1, 2)
+        grid.addWidget(self._origin_in, 1, 3)
         grid.addWidget(QLabel("Gender:"), 2, 0)
         grid.addWidget(self._gender_in, 2, 1)
         grid.addWidget(QLabel("Age:"), 2, 2)
         grid.addWidget(self._age_in, 2, 3)
-        grid.addWidget(QLabel("Origin:"), 3, 0)
-        grid.addWidget(self._origin_in, 3, 1, 1, 3)
 
-        # Turn counter
-        turn_row = QHBoxLayout()
-        turn_row.addWidget(QLabel("Turn:"))
-        self._turn_value = QLabel(str(self._char.turns))
-        self._turn_value.setProperty("role", "big")
-        turn_row.addWidget(self._turn_value)
-        minus = QPushButton("−")
-        plus = QPushButton("+")
-        minus.setFixedWidth(28)
-        plus.setFixedWidth(28)
-        minus.clicked.connect(lambda: self._on_turn(-1))
-        plus.clicked.connect(lambda: self._on_turn(1))
-        turn_row.addWidget(minus)
-        turn_row.addWidget(plus)
-        turn_row.addStretch(1)
+        # Right side: kind toggle, archive, view mode, delete
+        side = QHBoxLayout()
+        side.setSpacing(10)
+        # Template/Unique badge + toggle (party members are always unique)
+        self._kind_label = QLabel("")
+        self._kind_label.setProperty("role", "header")
+        side.addWidget(self._kind_label)
+        self._convert_btn = QPushButton("")
+        self._convert_btn.clicked.connect(self._on_convert_kind)
+        side.addWidget(self._convert_btn)
+        if self._char.role == "party":
+            self._convert_btn.setVisible(False)
 
-        # Delete button
+        self._archive_btn = QPushButton("")
+        self._archive_btn.clicked.connect(self._on_toggle_archive)
+        side.addWidget(self._archive_btn)
+
+        side.addStretch(1)
+        self._view_toggle = QPushButton("")
+        self._view_toggle.setCheckable(True)
+        self._view_toggle.clicked.connect(self._on_toggle_view)
+        side.addWidget(self._view_toggle)
+
         del_btn = QPushButton("Delete Character")
         del_btn.setProperty("role", "danger")
         del_btn.clicked.connect(self._on_delete_self)
-        turn_row.addWidget(del_btn)
+        side.addWidget(del_btn)
+        grid.addLayout(side, 3, 0, 1, 4)
 
-        grid.addLayout(turn_row, 4, 0, 1, 4)
         return box
 
-    def _on_turn(self, delta: int) -> None:
-        self._state.advance_turn(self._char, delta)
-        self._turn_value.setText(str(self._char.turns))
+    def _on_convert_kind(self) -> None:
+        if self._char.is_template:
+            self._state.convert_to_unique(self._char)
+        else:
+            reply = QMessageBox.question(
+                self, "Convert to Template",
+                "Convert this character to a template? Current vital state will be reset.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._state.convert_to_template(self._char)
+        self.refresh_all()
+
+    def _on_toggle_archive(self) -> None:
+        if self._char.is_template:
+            QMessageBox.information(self, "Archive", "Templates cannot be archived.")
+            return
+        new_state = not self._char.is_deceased
+        self._state.set_deceased(self._char, new_state)
+        self.refresh_all()
+
+    def _on_toggle_view(self) -> None:
+        self._state.toggle_developer_view()
 
     def _on_delete_self(self) -> None:
         reply = QMessageBox.question(
@@ -182,20 +267,19 @@ class CharacterSheet(QWidget):
             self._state.remove_character(self._char.id)
 
     # ------------------------------------------------------------------
-    # Vitals + KP
+    # Vitals
     # ------------------------------------------------------------------
-    def _build_vitals_and_kp(self) -> QWidget:
-        box = QGroupBox("Battle Statistics")
-        row = QHBoxLayout(box)
-        row.setContentsMargins(10, 14, 10, 10)
+    def _build_vitals_section(self) -> QWidget:
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
 
-        # Vitals column
-        vitals = QVBoxLayout()
         self._hp_bar = VitalBar("HP", "hp")
         self._stam_bar = VitalBar("Stamina", "stamina")
         self._mana_bar = VitalBar("Mana", "mana")
         for vb in (self._hp_bar, self._stam_bar, self._mana_bar):
-            vitals.addWidget(vb)
+            outer.addWidget(vb)
 
         self._hp_bar.current_input.valueChanged.connect(
             lambda v: self._set_field("health_current", v))
@@ -210,148 +294,72 @@ class CharacterSheet(QWidget):
         self._mana_bar.max_input.valueChanged.connect(
             lambda v: self._on_max_change("mana_max", v))
 
-        # KP column
-        kp_form = QFormLayout()
-        kp_form.setHorizontalSpacing(8)
-        kp_form.setVerticalSpacing(4)
-        self._kp_in = QSpinBox()
-        self._kp_in.setRange(0, 999999)
-        self._solo_kp_in = QSpinBox()
-        self._solo_kp_in.setRange(0, 999999)
-        self._participants_in = QSpinBox()
-        self._participants_in.setRange(1, 100)
-        self._sp_earned_label = QLabel("0.0")
-        self._sp_earned_label.setProperty("role", "big")
-        self._coord_label = QLabel("0.0")
-        self._coord_label.setProperty("role", "dim")
-        self._sp_apply_btn = QPushButton("Apply SP Earned")
-        self._sp_apply_btn.setProperty("role", "primary")
-        self._vital_max_label = QLabel("Vital Max: 300")
-        self._vital_max_label.setProperty("role", "dim")
-        self._distribute_btn = QPushButton("Distribute Vitals…")
-
-        self._kp_in.valueChanged.connect(lambda v: self._set_field("kill_points", v))
-        self._solo_kp_in.valueChanged.connect(lambda v: self._set_field("solo_kp", v))
-        self._participants_in.valueChanged.connect(lambda v: self._set_field("participants", v))
-        self._sp_apply_btn.clicked.connect(self._apply_earned_sp)
-        self._distribute_btn.clicked.connect(self._open_distribute_vitals)
-
-        kp_form.addRow(QLabel("Total Kill Points:"), self._kp_in)
-        kp_form.addRow(QLabel("Solo KP:"), self._solo_kp_in)
-        kp_form.addRow(QLabel("Participants:"), self._participants_in)
-        kp_form.addRow(QLabel("SP Earned:"), self._sp_earned_label)
-        kp_form.addRow(QLabel("Coordination:"), self._coord_label)
-        kp_form.addRow("", self._sp_apply_btn)
-        kp_form.addRow(self._vital_max_label, self._distribute_btn)
-
-        row.addLayout(vitals, 2)
-        row.addLayout(kp_form, 1)
-        return box
+        return wrap
 
     def _on_max_change(self, attr: str, value: int) -> None:
         if value < 50:
             value = 50
         self._set_field(attr, value)
 
-    def _apply_earned_sp(self) -> None:
-        lvl = me.level(self._char.total_sp())
-        sp = me.sp_earned(self._char.solo_kp, self._char.kill_points,
-                          self._char.participants, lvl)
-        if sp <= 0:
-            return
-        # Add to luck (small but harmless default); offer a picker dialog
-        prof_names = [PROF_LABELS[p] for p in PROFICIENCIES]
-        choice, ok = QInputDialog.getItem(
-            self, "Apply Earned SP",
-            f"Award {sp} SP to which proficiency?",
-            prof_names, 0, False,
-        )
-        if not ok:
-            return
-        prof_key = next(p for p, lbl in PROF_LABELS.items() if lbl == choice)
-        current = self._char.sp_for(prof_key)
-        new = min(200, current + int(round(sp)))
-        self._state.set_character_field(self._char, f"{prof_key}_sp", new)
-        QMessageBox.information(self, "SP Applied",
-                                f"Added {new - current} SP to {choice}.")
-        self.refresh_all()
+    # ------------------------------------------------------------------
+    # Battle Statistics (KP + SP calculator)
+    # ------------------------------------------------------------------
+    def _build_battle_stats_section(self) -> QWidget:
+        wrap = QWidget()
+        form = QFormLayout(wrap)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
 
-    def _open_distribute_vitals(self) -> None:
-        from PyQt6.QtWidgets import QDialog, QDialogButtonBox
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Distribute Vital Pool")
-        v = QVBoxLayout(dlg)
+        self._kp_in = NoWheelSpinBox()
+        self._kp_in.setRange(0, 999999)
+        self._solo_kp_in = NoWheelSpinBox()
+        self._solo_kp_in.setRange(0, 999999)
+        self._participants_in = NoWheelSpinBox()
+        self._participants_in.setRange(1, 100)
+        self._sp_earned_label = QLabel("0.0")
+        self._sp_earned_label.setProperty("role", "big")
+        self._coord_label = QLabel("0.0")
+        self._vital_calc_label = QLabel("")
+        self._vital_calc_label.setProperty("role", "dim")
+        self._vital_calc_label.setWordWrap(True)
 
-        lvl = me.level(self._char.total_sp())
-        vital_max_total = me.vital_max(lvl)
+        self._kp_in.valueChanged.connect(lambda v: self._set_field("kill_points", v))
+        self._solo_kp_in.valueChanged.connect(lambda v: self._set_field("solo_kp", v))
+        self._participants_in.valueChanged.connect(
+            lambda v: self._set_field("participants", v))
 
-        info = QLabel(f"Vital Max: {vital_max_total}  (Level {lvl})\n"
-                      f"Minimum 50 per pool. Distribution must sum to total.")
-        info.setProperty("role", "dim")
-        v.addWidget(info)
-
-        form = QFormLayout()
-        hp = QSpinBox(); hp.setRange(50, vital_max_total); hp.setValue(self._char.health_max)
-        st = QSpinBox(); st.setRange(50, vital_max_total); st.setValue(self._char.stamina_max)
-        mn = QSpinBox(); mn.setRange(50, vital_max_total); mn.setValue(self._char.mana_max)
-        form.addRow("HP max:", hp)
-        form.addRow("Stamina max:", st)
-        form.addRow("Mana max:", mn)
-        sum_label = QLabel()
-        form.addRow("Total:", sum_label)
-
-        def refresh_sum() -> None:
-            s = hp.value() + st.value() + mn.value()
-            sum_label.setText(f"{s} / {vital_max_total}")
-            sum_label.setProperty("role",
-                                  "vital_low" if s != vital_max_total else "")
-            sum_label.style().unpolish(sum_label); sum_label.style().polish(sum_label)
-
-        for w in (hp, st, mn):
-            w.valueChanged.connect(refresh_sum)
-        refresh_sum()
-        v.addLayout(form)
-
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        v.addWidget(bb)
-        bb.accepted.connect(dlg.accept)
-        bb.rejected.connect(dlg.reject)
-
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            if hp.value() + st.value() + mn.value() != vital_max_total:
-                QMessageBox.warning(self, "Invalid Distribution",
-                                    "Pools must sum exactly to the vital max.")
-                return
-            self._state.set_character_field(self._char, "health_max", hp.value())
-            self._state.set_character_field(self._char, "stamina_max", st.value())
-            self._state.set_character_field(self._char, "mana_max", mn.value())
-            if self._char.health_current > hp.value():
-                self._state.set_character_field(self._char, "health_current", hp.value())
-            if self._char.stamina_current > st.value():
-                self._state.set_character_field(self._char, "stamina_current", st.value())
-            if self._char.mana_current > mn.value():
-                self._state.set_character_field(self._char, "mana_current", mn.value())
-            self.refresh_all()
+        form.addRow("Total Kill Points:", self._kp_in)
+        form.addRow("Solo KP:", self._solo_kp_in)
+        form.addRow("Participants:", self._participants_in)
+        form.addRow("SP Earned:", self._sp_earned_label)
+        self._coord_row_label = QLabel("Coordination:")
+        form.addRow(self._coord_row_label, self._coord_label)
+        form.addRow("", self._vital_calc_label)
+        return wrap
 
     # ------------------------------------------------------------------
-    # Level + DICE
+    # Level / Dice
     # ------------------------------------------------------------------
-    def _build_level_dice(self) -> QWidget:
-        box = QGroupBox("Level / Dice")
-        row = QHBoxLayout(box)
-        row.setContentsMargins(10, 14, 10, 10)
+    def _build_level_dice_section(self) -> QWidget:
+        wrap = QWidget()
+        row = QHBoxLayout(wrap)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(16)
 
         self._level_label = QLabel("Level: 1")
         self._level_label.setProperty("role", "big")
         self._total_sp_label = QLabel("Total SP: 10")
         self._total_sp_label.setProperty("role", "dim")
 
-        self._dice_in = QSpinBox()
+        self._dice_in = NoWheelSpinBox()
         self._dice_in.setRange(1, 20)
         self._dice_in.setValue(self._char.dice)
         self._dice_in.valueChanged.connect(lambda v: self._set_field("dice", v))
-        dice_label = QLabel("DICE (manual d20 value):")
+        dice_label = QLabel("DICE (manual):")
         dice_label.setProperty("role", "header")
+        self._dice_note = QLabel("(no effect; test only)")
+        self._dice_note.setProperty("role", "dim")
 
         row.addWidget(self._level_label)
         row.addSpacing(20)
@@ -359,29 +367,34 @@ class CharacterSheet(QWidget):
         row.addStretch(1)
         row.addWidget(dice_label)
         row.addWidget(self._dice_in)
-        return box
+        row.addWidget(self._dice_note)
+        return wrap
 
     # ------------------------------------------------------------------
-    # Proficiencies grid
+    # Proficiencies
     # ------------------------------------------------------------------
-    def _build_proficiencies(self) -> QWidget:
-        box = QGroupBox("Proficiencies")
-        outer = QVBoxLayout(box)
-        outer.setContentsMargins(10, 14, 10, 10)
+    def _build_proficiencies_section(self) -> QWidget:
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         self._prof_table = QTableWidget(0, 4)
         self._prof_table.setHorizontalHeaderLabels(
             ["Proficiency", "SP", "Dice Bonus", "Throw Result"])
         self._prof_table.verticalHeader().setVisible(False)
-        self._prof_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch)
+        h = self._prof_table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self._prof_table.setColumnWidth(1, 110)
+        self._prof_table.setColumnWidth(2, 130)
         self._prof_table.setEditTriggers(
             QTableWidget.EditTrigger.NoEditTriggers)
         self._prof_table.setSelectionMode(
             QTableWidget.SelectionMode.NoSelection)
 
-        # Build header rows + spinboxes; one attribute pair per group.
-        self._sp_spins: dict[str, QSpinBox] = {}
+        self._sp_spins: dict[str, NoWheelSpinBox] = {}
         row = 0
         for attr_name, (p1, p2) in ATTRIBUTES.items():
             self._prof_table.insertRow(row)
@@ -393,7 +406,7 @@ class CharacterSheet(QWidget):
             for p in (p1, p2):
                 self._prof_table.insertRow(row)
                 self._prof_table.setItem(row, 0, QTableWidgetItem(PROF_LABELS[p]))
-                spin = QSpinBox()
+                spin = NoWheelSpinBox()
                 spin.setRange(1, 200)
                 spin.setValue(self._char.sp_for(p))
                 spin.valueChanged.connect(
@@ -403,28 +416,28 @@ class CharacterSheet(QWidget):
                 self._prof_table.setItem(row, 2, QTableWidgetItem("0.0"))
                 self._prof_table.setItem(row, 3, QTableWidgetItem("0.0"))
                 row += 1
-        self._prof_table.setMinimumHeight(
-            self._prof_table.verticalHeader().defaultSectionSize() * (row + 1))
+        h_total = self._prof_table.verticalHeader().defaultSectionSize() * (row + 1)
+        self._prof_table.setMinimumHeight(h_total)
         outer.addWidget(self._prof_table)
-        return box
+        return wrap
 
     # ------------------------------------------------------------------
-    # Combat resolution
+    # Combat Resolution
     # ------------------------------------------------------------------
-    def _build_combat_resolution(self) -> QWidget:
-        box = QGroupBox("Combat Resolution")
-        grid = QGridLayout(box)
-        grid.setContentsMargins(10, 14, 10, 10)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(4)
+    def _build_combat_resolution_section(self) -> QWidget:
+        wrap = QWidget()
+        grid = QGridLayout(wrap)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(10)
 
-        self._dmg_received_in = QSpinBox()
+        self._dmg_received_in = NoWheelSpinBox()
         self._dmg_received_in.setRange(0, 99999)
         self._dmg_received_in.setValue(self._char.dmg_received)
         self._dmg_received_in.valueChanged.connect(
             lambda v: self._set_field("dmg_received", v))
 
-        self._fall_in = QSpinBox()
+        self._fall_in = NoWheelSpinBox()
         self._fall_in.setRange(0, 9999)
         self._fall_in.setValue(self._char.fall_height)
         self._fall_in.valueChanged.connect(
@@ -450,16 +463,13 @@ class CharacterSheet(QWidget):
         apply_hp_btn = QPushButton("Apply HP Loss")
         apply_hp_btn.setProperty("role", "danger")
         apply_hp_btn.clicked.connect(self._on_apply_hp_loss)
-
         apply_shielded_btn = QPushButton("Apply Shielded HP Loss")
         apply_shielded_btn.setProperty("role", "danger")
         apply_shielded_btn.clicked.connect(self._on_apply_shielded_hp_loss)
-
         apply_fall_btn = QPushButton("Apply Fall Damage")
         apply_fall_btn.setProperty("role", "danger")
         apply_fall_btn.clicked.connect(self._on_apply_fall_damage)
 
-        # Left column: incoming damage + fall
         grid.addWidget(QLabel("Damage Received:"), 0, 0)
         grid.addWidget(self._dmg_received_in, 0, 1)
         grid.addWidget(QLabel("HP Loss:"), 0, 2)
@@ -476,13 +486,14 @@ class CharacterSheet(QWidget):
         grid.addWidget(self._fall_damage_label, 2, 3)
         grid.addWidget(apply_fall_btn, 2, 4)
 
-        # Right block: DEF / ATK / dodge
-        grid.addWidget(QLabel("DEF current:"), 3, 0)
+        self._def_current_lbl = QLabel("DEF current:")
+        grid.addWidget(self._def_current_lbl, 3, 0)
         grid.addWidget(self._def_current_label, 3, 1)
         grid.addWidget(QLabel("DEF value:"), 3, 2)
         grid.addWidget(self._def_value_label, 3, 3)
 
-        grid.addWidget(QLabel("ATK current:"), 4, 0)
+        self._atk_current_lbl = QLabel("ATK current:")
+        grid.addWidget(self._atk_current_lbl, 4, 0)
         grid.addWidget(self._atk_current_label, 4, 1)
         grid.addWidget(QLabel("Dodge:"), 4, 2)
         grid.addWidget(self._dodge_label, 4, 3)
@@ -497,7 +508,7 @@ class CharacterSheet(QWidget):
         grid.addWidget(QLabel("Stealth ATK:"), 6, 2)
         grid.addWidget(self._stealth_label, 6, 3)
 
-        return box
+        return wrap
 
     def _on_apply_hp_loss(self) -> None:
         loss = self._compute_combat()["hp_loss"]
@@ -515,10 +526,12 @@ class CharacterSheet(QWidget):
         self.refresh_all()
 
     # ------------------------------------------------------------------
-    # Throw results (collapsible)
+    # Throw Results
     # ------------------------------------------------------------------
-    def _build_throw_results(self) -> QWidget:
-        self._throw_section = CollapsibleSection("Throw Results", starts_open=False)
+    def _build_throw_results_section(self) -> QWidget:
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
         self._throw_table = QTableWidget(0, 4)
         self._throw_table.setHorizontalHeaderLabels(
             ["Proficiency", "Effective SP", "Throw", "Crit?"])
@@ -528,22 +541,24 @@ class CharacterSheet(QWidget):
         self._throw_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         for _ in PROFICIENCIES:
             self._throw_table.insertRow(self._throw_table.rowCount())
-        self._throw_table.setMinimumHeight(
-            self._throw_table.verticalHeader().defaultSectionSize() * (len(PROFICIENCIES) + 1))
-        self._throw_section.add(self._throw_table)
-        return self._throw_section
+        h_total = self._throw_table.verticalHeader().defaultSectionSize() * (len(PROFICIENCIES) + 1)
+        self._throw_table.setMinimumHeight(h_total)
+        outer.addWidget(self._throw_table)
+        return wrap
 
     # ------------------------------------------------------------------
     # Weapons
     # ------------------------------------------------------------------
-    def _build_weapons(self) -> QWidget:
-        box = QGroupBox("Weapons & Shield")
-        grid = QGridLayout(box)
-        grid.setContentsMargins(10, 14, 10, 10)
+    def _build_weapons_section(self) -> QWidget:
+        wrap = QWidget()
+        grid = QGridLayout(wrap)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
 
-        self._primary_combo = QComboBox()
-        self._secondary_combo = QComboBox()
-        self._shield_combo = QComboBox()
+        self._primary_combo = NoWheelComboBox()
+        self._secondary_combo = NoWheelComboBox()
+        self._shield_combo = NoWheelComboBox()
         self._using_primary_chk = QCheckBox("Using Primary (otherwise Secondary)")
         self._using_primary_chk.setChecked(self._char.using_primary)
         self._using_primary_chk.toggled.connect(
@@ -563,9 +578,9 @@ class CharacterSheet(QWidget):
         grid.addWidget(QLabel("Shield:"), 2, 0)
         grid.addWidget(self._shield_combo, 2, 1)
         grid.addWidget(self._using_primary_chk, 3, 0, 1, 2)
-        return box
+        return wrap
 
-    def _on_combo_change(self, field: str, combo: QComboBox) -> None:
+    def _on_combo_change(self, field: str, combo: NoWheelComboBox) -> None:
         if self._suspend:
             return
         data = combo.currentData()
@@ -574,16 +589,17 @@ class CharacterSheet(QWidget):
     # ------------------------------------------------------------------
     # Spells
     # ------------------------------------------------------------------
-    def _build_spells(self) -> QWidget:
-        box = QGroupBox("Spells")
-        outer = QVBoxLayout(box)
-        outer.setContentsMargins(10, 14, 10, 10)
-
+    def _build_spells_section(self) -> QWidget:
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
         self._spell_list = QListWidget()
-        outer.addWidget(self._spell_list)
+        outer.addWidget(Resizable(self._spell_list, initial_height=140))
 
         row = QHBoxLayout()
-        self._add_spell_combo = QComboBox()
+        row.setSpacing(10)
+        self._add_spell_combo = NoWheelComboBox()
         add_btn = QPushButton("+ Add")
         add_btn.setProperty("role", "primary")
         remove_btn = QPushButton("− Remove")
@@ -599,7 +615,7 @@ class CharacterSheet(QWidget):
         row.addWidget(remove_btn)
         row.addWidget(cast_btn)
         outer.addLayout(row)
-        return box
+        return wrap
 
     def _on_add_spell(self) -> None:
         sid = self._add_spell_combo.currentData()
@@ -631,63 +647,65 @@ class CharacterSheet(QWidget):
     # ------------------------------------------------------------------
     # Armor
     # ------------------------------------------------------------------
-    def _build_armor(self) -> QWidget:
-        box = QGroupBox("Armor Equipment")
-        grid = QGridLayout(box)
-        grid.setContentsMargins(10, 14, 10, 10)
-
-        self._armor_combos: dict[str, QComboBox] = {}
+    def _build_armor_section(self) -> QWidget:
+        wrap = QWidget()
+        grid = QGridLayout(wrap)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        self._armor_combos: dict[str, NoWheelComboBox] = {}
         for i, slot in enumerate(ARMOR_SLOTS):
             grid.addWidget(QLabel(slot.title() + ":"), i, 0)
-            cb = QComboBox()
+            cb = NoWheelComboBox()
             self._armor_combos[slot] = cb
             grid.addWidget(cb, i, 1)
             cb.currentIndexChanged.connect(
                 lambda _i, s=slot, c=cb: self._on_combo_change(f"{s}_id", c))
-
         self._armor_total_label = QLabel("Total Armor: 0")
         self._armor_total_label.setProperty("role", "big")
         grid.addWidget(self._armor_total_label, len(ARMOR_SLOTS), 0, 1, 2)
-        return box
+        return wrap
 
     # ------------------------------------------------------------------
     # Passives
     # ------------------------------------------------------------------
-    def _build_passives(self) -> QWidget:
-        box = QGroupBox("Passives")
-        outer = QVBoxLayout(box)
-        outer.setContentsMargins(10, 14, 10, 10)
+    def _build_passives_section(self) -> QWidget:
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
         self._passive_editor = PassiveListEditor(source_default="character")
         self._passive_editor.changed.connect(
             lambda: self._state.character_changed.emit(self._char.id))
-        outer.addWidget(self._passive_editor)
-        return box
+        outer.addWidget(Resizable(self._passive_editor, initial_height=220))
+        return wrap
 
     # ------------------------------------------------------------------
     # Inventory
     # ------------------------------------------------------------------
-    def _build_inventory(self) -> QWidget:
-        box = QGroupBox("Inventory")
-        outer = QVBoxLayout(box)
-        outer.setContentsMargins(10, 14, 10, 10)
+    def _build_inventory_section(self) -> QWidget:
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
 
         top_row = QHBoxLayout()
+        top_row.setSpacing(12)
         self._inv_filled_label = QLabel("Filled: 0")
         self._inv_filled_label.setProperty("role", "big")
         self._inv_max_label = QLabel("Max: 20")
         self._inv_overflow_label = QLabel("")
         self._inv_overflow_label.setProperty("role", "warning")
-        self._base_max_in = QSpinBox()
+        self._base_max_in = NoWheelSpinBox()
         self._base_max_in.setRange(0, 9999)
         self._base_max_in.setValue(self._char.base_max_inventory_slots)
         self._base_max_in.valueChanged.connect(
             lambda v: self._set_field("base_max_inventory_slots", v))
-        self._backpack_in = QSpinBox()
+        self._backpack_in = NoWheelSpinBox()
         self._backpack_in.setRange(0, 999)
         self._backpack_in.setValue(self._char.backpack_slots)
         self._backpack_in.valueChanged.connect(
             lambda v: self._set_field("backpack_slots", v))
-        self._gold_in = QDoubleSpinBox()
+        self._gold_in = NoWheelDoubleSpinBox()
         self._gold_in.setRange(0, 9999999.0)
         self._gold_in.setDecimals(2)
         self._gold_in.setValue(self._char.gold)
@@ -695,9 +713,7 @@ class CharacterSheet(QWidget):
             lambda v: self._set_field("gold", v))
 
         top_row.addWidget(self._inv_filled_label)
-        top_row.addSpacing(8)
         top_row.addWidget(self._inv_max_label)
-        top_row.addSpacing(8)
         top_row.addWidget(self._inv_overflow_label)
         top_row.addStretch(1)
         top_row.addWidget(QLabel("Base max:"))
@@ -709,14 +725,14 @@ class CharacterSheet(QWidget):
         outer.addLayout(top_row)
 
         self._inv_list = QListWidget()
-        outer.addWidget(self._inv_list)
+        outer.addWidget(Resizable(self._inv_list, initial_height=160))
 
-        # Edit row
         edit_row = QHBoxLayout()
+        edit_row.setSpacing(10)
         self._inv_title_in = QLineEdit()
         self._inv_title_in.setPlaceholderText("Title (freeform)")
-        self._inv_item_combo = QComboBox()
-        self._inv_qty_in = QSpinBox()
+        self._inv_item_combo = NoWheelComboBox()
+        self._inv_qty_in = NoWheelSpinBox()
         self._inv_qty_in.setRange(1, 999)
         self._inv_qty_in.setValue(1)
         add_btn = QPushButton("+ Add")
@@ -734,7 +750,7 @@ class CharacterSheet(QWidget):
         edit_row.addWidget(add_btn)
         edit_row.addWidget(rm_btn)
         outer.addLayout(edit_row)
-        return box
+        return wrap
 
     def _on_add_inv(self) -> None:
         item_id = self._inv_item_combo.currentData()
@@ -757,12 +773,14 @@ class CharacterSheet(QWidget):
     # ------------------------------------------------------------------
     # Forms (shapeshifter)
     # ------------------------------------------------------------------
-    def _build_forms(self) -> QWidget:
-        box = QGroupBox("Forms")
-        outer = QVBoxLayout(box)
-        outer.setContentsMargins(10, 14, 10, 10)
+    def _build_forms_section(self) -> QWidget:
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
 
         top = QHBoxLayout()
+        top.setSpacing(12)
         self._shifter_chk = QCheckBox("Shapeshifter")
         self._shifter_chk.setChecked(self._char.is_shapeshifter)
         self._shifter_chk.toggled.connect(self._on_toggle_shifter)
@@ -770,7 +788,7 @@ class CharacterSheet(QWidget):
 
         top.addSpacing(20)
         top.addWidget(QLabel("Active Form:"))
-        self._active_form_combo = QComboBox()
+        self._active_form_combo = NoWheelComboBox()
         self._active_form_combo.currentIndexChanged.connect(self._on_active_form_changed)
         top.addWidget(self._active_form_combo, 1)
         self._enter_form_btn = QPushButton("Enter Form (pay mana)")
@@ -788,9 +806,10 @@ class CharacterSheet(QWidget):
         self._forms_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Interactive)
         self._forms_table.itemChanged.connect(self._on_form_cell_changed)
-        outer.addWidget(self._forms_table)
+        outer.addWidget(Resizable(self._forms_table, initial_height=240))
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
         add_form = QPushButton("+ Add Form")
         add_form.setProperty("role", "primary")
         rm_form = QPushButton("− Remove Form")
@@ -801,7 +820,7 @@ class CharacterSheet(QWidget):
         btn_row.addWidget(rm_form)
         btn_row.addStretch(1)
         outer.addLayout(btn_row)
-        return box
+        return wrap
 
     def _on_toggle_shifter(self, checked: bool) -> None:
         self._set_field("is_shapeshifter", checked)
@@ -869,12 +888,13 @@ class CharacterSheet(QWidget):
         self._state.character_changed.emit(self._char.id)
 
     # ------------------------------------------------------------------
-    # NPC-specific section
+    # NPC section
     # ------------------------------------------------------------------
     def _build_npc_section(self) -> QWidget:
-        box = QGroupBox("NPC")
-        form = QFormLayout(box)
-        form.setContentsMargins(10, 14, 10, 10)
+        wrap = QWidget()
+        form = QFormLayout(wrap)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setVerticalSpacing(10)
         self._npc_occupation = QLineEdit(self._char.occupation)
         self._npc_home = QLineEdit(self._char.home)
         self._npc_description = QPlainTextEdit(self._char.description)
@@ -900,30 +920,24 @@ class CharacterSheet(QWidget):
         form.addRow("Description:", self._npc_description)
         form.addRow("Involvement:", self._npc_involvement)
         form.addRow("", self._npc_has_stats)
-
-        self._stance_label = QLabel("(stances toward party members set on edit)")
-        self._stance_label.setProperty("role", "dim")
-        form.addRow("Stances:", self._stance_label)
-        return box
+        return wrap
 
     # ------------------------------------------------------------------
     # General Info
     # ------------------------------------------------------------------
-    def _build_general_info(self) -> QWidget:
-        sect = CollapsibleSection("General Info / Notes", starts_open=False)
-        form = QFormLayout()
+    def _build_general_info_section(self) -> QWidget:
+        wrap = QWidget()
+        form = QFormLayout(wrap)
+        form.setContentsMargins(0, 0, 0, 0)
         self._notes_in = QPlainTextEdit(self._char.notes)
         self._notes_in.setFixedHeight(80)
         self._notes_in.textChanged.connect(
             lambda: self._set_field("notes", self._notes_in.toPlainText()))
         form.addRow("Notes:", self._notes_in)
-        wrap = QWidget()
-        wrap.setLayout(form)
-        sect.add(wrap)
-        return sect
+        return wrap
 
     # ------------------------------------------------------------------
-    # Refresh logic
+    # Refresh
     # ------------------------------------------------------------------
     def refresh_all(self) -> None:
         self._suspend = True
@@ -944,7 +958,6 @@ class CharacterSheet(QWidget):
         self._suspend = False
 
     def refresh_derived(self) -> None:
-        """Faster path: re-run only the derived widgets that depend on inputs."""
         self._refresh_level_dice()
         self._refresh_proficiencies()
         self._refresh_throws()
@@ -954,16 +967,50 @@ class CharacterSheet(QWidget):
     def _refresh_header(self) -> None:
         self._name_in.setText(self._char.name)
         self._race_in.setText(self._char.race)
-        self._class_in.setText(self._char.class_name)
         self._gender_in.setText(self._char.gender)
         self._age_in.setText(self._char.age)
         self._origin_in.setText(self._char.origin)
-        self._turn_value.setText(str(self._char.turns))
+        # Kind label and buttons
+        if self._char.role == "party":
+            self._kind_label.setText("[ Unique party member ]")
+        else:
+            self._kind_label.setText(
+                "[ Template ]" if self._char.is_template else "[ Unique ]")
+            self._convert_btn.setText("Convert to Unique" if self._char.is_template
+                                       else "Convert to Template")
+        if self._char.is_template:
+            self._archive_btn.setVisible(False)
+        else:
+            self._archive_btn.setVisible(True)
+            self._archive_btn.setText("Unarchive" if self._char.is_deceased
+                                       else "Archive (Deceased)")
+        # View toggle
+        is_dev = self._state.state.developer_view
+        self._view_toggle.setChecked(is_dev)
+        self._view_toggle.setText("Developer view" if is_dev else "DM view")
 
     def _refresh_vitals(self) -> None:
-        self._hp_bar.set_values(self._char.health_current, self._char.health_max)
-        self._stam_bar.set_values(self._char.stamina_current, self._char.stamina_max)
-        self._mana_bar.set_values(self._char.mana_current, self._char.mana_max)
+        if self._char.is_template:
+            # Templates: hide current vital inputs; show only max
+            self._hp_bar.set_values(self._char.health_max, self._char.health_max,
+                                    animate=False)
+            self._stam_bar.set_values(self._char.stamina_max, self._char.stamina_max,
+                                      animate=False)
+            self._mana_bar.set_values(self._char.mana_max, self._char.mana_max,
+                                      animate=False)
+            for bar in (self._hp_bar, self._stam_bar, self._mana_bar):
+                bar.current_input.setReadOnly(True)
+                bar.current_input.setButtonSymbols(
+                    NoWheelSpinBox.ButtonSymbols.NoButtons)
+        else:
+            self._hp_bar.set_values(self._char.health_current, self._char.health_max)
+            self._stam_bar.set_values(self._char.stamina_current, self._char.stamina_max)
+            self._mana_bar.set_values(self._char.mana_current, self._char.mana_max)
+            for bar in (self._hp_bar, self._stam_bar, self._mana_bar):
+                bar.current_input.setReadOnly(False)
+                bar.current_input.setButtonSymbols(
+                    NoWheelSpinBox.ButtonSymbols.UpDownArrows)
+        # KP fields
         self._kp_in.setValue(self._char.kill_points)
         self._solo_kp_in.setValue(self._char.solo_kp)
         self._participants_in.setValue(self._char.participants)
@@ -974,19 +1021,29 @@ class CharacterSheet(QWidget):
         self._level_label.setText(f"Level: {lvl}")
         self._total_sp_label.setText(f"Total SP: {total_sp}")
         self._dice_in.setValue(self._char.dice)
-        self._vital_max_label.setText(f"Vital Max: {me.vital_max(lvl)}")
 
-        # KP-derived labels
         coord = me.coordination(self._char.kill_points, self._char.participants)
         sp_earn = me.sp_earned(self._char.solo_kp, self._char.kill_points,
                                self._char.participants, lvl)
         self._coord_label.setText(f"{coord:.1f}")
         self._sp_earned_label.setText(f"{sp_earn:.1f}")
 
+        # v3.1: SP-to-vital-max calculator
+        if sp_earn > 0:
+            gain = me.vital_max_gain_from_sp(total_sp, sp_earn)
+            if gain > 0:
+                self._vital_calc_label.setText(
+                    f"If you spend the {sp_earn:.1f} earned SP, your Vital Max increases by {gain}."
+                )
+            else:
+                self._vital_calc_label.setText(
+                    f"Spending the {sp_earn:.1f} earned SP would not change your Vital Max."
+                )
+        else:
+            self._vital_calc_label.setText("")
+
     def _refresh_proficiencies(self) -> None:
-        # Update SP spinners + computed bonus/throw cells + attribute totals.
         profs = me.derive_proficiency_view(self._char)
-        # Walk rows: attribute header rows interleave with profs.
         row = 0
         for attr_name, (p1, p2) in ATTRIBUTES.items():
             total = self._char.attribute_total(attr_name)
@@ -1003,12 +1060,8 @@ class CharacterSheet(QWidget):
                 self._prof_table.item(row, 2).setText(bonus_text)
                 throw_item = self._prof_table.item(row, 3)
                 throw_item.setText(throw_text)
-                if profs[p]["is_critical"]:
-                    from PyQt6.QtGui import QBrush, QColor
-                    throw_item.setForeground(QBrush(QColor("#f72c25")))
-                else:
-                    from PyQt6.QtGui import QBrush, QColor
-                    throw_item.setForeground(QBrush(QColor("#fafafa")))
+                color = "#f72c25" if profs[p]["is_critical"] else "#fafafa"
+                throw_item.setForeground(QBrush(QColor(color)))
                 row += 1
 
     def _refresh_throws(self) -> None:
@@ -1021,27 +1074,8 @@ class CharacterSheet(QWidget):
                 QTableWidgetItem("yes" if profs[p]["is_critical"] else ""))
 
     def _compute_combat(self) -> dict:
-        # Use full state to ensure filled_inventory_slots reflects real item slot_counts.
-        c = me.derive_combat_view(self._char, self._state.state.weapons,
-                                  self._state.state.armors)
-        # Recompute filled with item list to be accurate
-        filled = self._char.filled_inventory_slots(self._state.state.items)
-        profs = me.derive_proficiency_view(self._char)
-        armor_throw = profs["armor"]["throw"]
-        armor_pieces = self._char.get_armor_pieces(self._state.state.armors)
-        armor_sum = sum(a.armor_value for a in armor_pieces)
-        c["def_current"] = armor_sum
-        c["dodge"] = me.dodge_value(
-            armor_throw, profs["acrobatics"]["throw"],
-            self._char.effective_sp("armor"),
-            self._char.effective_sp("acrobatics"),
-            armor_sum, filled,
-        )
-        c["fall_damage"] = me.fall_damage(
-            self._char.fall_height, self._char.effective_sp("acrobatics"),
-            self._char.effective_sp("armor"), armor_sum, filled, c["dodge"],
-        )
-        return c
+        return me.derive_combat_view(self._char, self._state.state.weapons,
+                                     self._state.state.armors, self._state.state.items)
 
     def _refresh_combat(self) -> None:
         c = self._compute_combat()
@@ -1069,7 +1103,8 @@ class CharacterSheet(QWidget):
         for sid in self._char.spell_ids:
             spell = next((s for s in self._state.state.spells if s.id == sid), None)
             if spell:
-                item = QListWidgetItem(f"{spell.name} — mana {spell.mana_cost}, level {spell.arcana_level}")
+                item = QListWidgetItem(
+                    f"{spell.name} — mana {spell.mana_cost}, level {spell.arcana_level}")
                 item.setData(Qt.ItemDataRole.UserRole, sid)
                 self._spell_list.addItem(item)
 
@@ -1085,7 +1120,6 @@ class CharacterSheet(QWidget):
             if entry.notes:
                 line += f" — {entry.notes}"
             self._inv_list.addItem(line)
-
         filled = self._char.filled_inventory_slots(self._state.state.items)
         mx = self._char.max_inventory_slots()
         self._inv_filled_label.setText(f"Filled: {filled}")
@@ -1097,7 +1131,6 @@ class CharacterSheet(QWidget):
 
     def _refresh_forms(self) -> None:
         self._shifter_chk.setChecked(self._char.is_shapeshifter)
-        # Active form combo
         self._active_form_combo.blockSignals(True)
         self._active_form_combo.clear()
         self._active_form_combo.addItem("(none)", None)
@@ -1110,7 +1143,6 @@ class CharacterSheet(QWidget):
                     break
         self._active_form_combo.blockSignals(False)
 
-        # Forms table
         self._forms_table.blockSignals(True)
         self._forms_table.setRowCount(0)
         for f in self._char.forms:
@@ -1127,7 +1159,6 @@ class CharacterSheet(QWidget):
         self._forms_table.blockSignals(False)
 
     def _refresh_lookup_dropdowns(self) -> None:
-        # Weapons
         for combo, current in (
             (self._primary_combo, self._char.primary_weapon_id),
             (self._secondary_combo, self._char.secondary_weapon_id),
@@ -1145,7 +1176,6 @@ class CharacterSheet(QWidget):
                         combo.setCurrentIndex(i)
                         break
             combo.blockSignals(False)
-        # Armor by slot
         for slot, combo in self._armor_combos.items():
             current = getattr(self._char, f"{slot}_id")
             combo.blockSignals(True)
@@ -1160,16 +1190,39 @@ class CharacterSheet(QWidget):
                         combo.setCurrentIndex(i)
                         break
             combo.blockSignals(False)
-        # Spells (add list)
         self._add_spell_combo.blockSignals(True)
         self._add_spell_combo.clear()
         for s in self._state.state.spells:
             self._add_spell_combo.addItem(f"{s.name} (mana {s.mana_cost})", s.id)
         self._add_spell_combo.blockSignals(False)
-        # Inventory items
         self._inv_item_combo.blockSignals(True)
         self._inv_item_combo.clear()
         self._inv_item_combo.addItem("(freeform)", None)
         for it in self._state.state.items:
             self._inv_item_combo.addItem(f"{it.name} (slot {it.slot_count})", it.id)
         self._inv_item_combo.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # View mode (DM vs Developer)
+    # ------------------------------------------------------------------
+    def _apply_view_mode(self) -> None:
+        is_dev = self._state.state.developer_view
+        # Hide Total SP, Dice Bonus column, Coordination, DEF current, ATK current
+        self._total_sp_label.setVisible(is_dev)
+        # Dice Bonus column
+        self._prof_table.setColumnHidden(2, not is_dev)
+        # Coordination row
+        self._coord_row_label.setVisible(is_dev)
+        self._coord_label.setVisible(is_dev)
+        # DEF current
+        self._def_current_lbl.setVisible(is_dev)
+        self._def_current_label.setVisible(is_dev)
+        # ATK current
+        self._atk_current_lbl.setVisible(is_dev)
+        self._atk_current_label.setVisible(is_dev)
+        # Vital max input shown only in developer view
+        self._hp_bar.max_input.setVisible(is_dev)
+        self._stam_bar.max_input.setVisible(is_dev)
+        self._mana_bar.max_input.setVisible(is_dev)
+        self._view_toggle.setText("Developer view" if is_dev else "DM view")
+        self._view_toggle.setChecked(is_dev)

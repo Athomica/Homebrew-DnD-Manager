@@ -1,4 +1,14 @@
-"""Main window: top-level tabs, menu bar, status bar, total turn counter."""
+"""Main window for v3.1.
+
+Top-level tabs:
+1. Global Character List (Party / Mobs / NPCs)
+2. Encounters
+3. Global Lists
+4. Combat & Change Log
+
+The Scaling Modifiers panel appears as a dock/tab toggle in the
+Developer view.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,21 +17,24 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QSpinBox, QFileDialog, QMessageBox, QStatusBar, QInputDialog, QDialog,
-    QPlainTextEdit, QDialogButtonBox,
+    QSpinBox, QFileDialog, QMessageBox, QStatusBar, QDialog,
+    QPlainTextEdit, QDialogButtonBox, QDockWidget, QPushButton,
+    QLineEdit, QFormLayout,
 )
 
 from state import StateManager, SAVES_DIR, AUTOSAVE_DIR
-from ui.party_tab import CharacterGroupTab
+from ui.global_character_list_tab import GlobalCharacterListTab
+from ui.encounter_tab import EncounterTab
 from ui.lists_tab import GlobalListsTab
 from ui.combat_log import CombatLogTab
+from ui.components.scaling_modifiers import ScalingModifiersPanel
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("DnD Manager v3")
-        self.resize(1280, 800)
+        self.setWindowTitle("DnD Manager v3.1")
+        self.resize(1400, 900)
         self.setMinimumSize(900, 700)
 
         self._state = StateManager(self)
@@ -29,11 +42,12 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(6)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(10)
 
-        # Top status strip: total turns + last DICE
+        # Top status strip
         strip = QHBoxLayout()
+        strip.setSpacing(12)
         strip.addWidget(QLabel("Total Turns:"))
         self._total_turn_label = QLabel("0")
         self._total_turn_label.setProperty("role", "big")
@@ -43,25 +57,34 @@ class MainWindow(QMainWindow):
         self._campaign_label.setProperty("role", "dim")
         strip.addWidget(self._campaign_label)
         strip.addStretch(1)
+        self._view_chip = QLabel("DM view")
+        self._view_chip.setProperty("role", "dim")
+        strip.addWidget(self._view_chip)
         outer.addLayout(strip)
 
         # Main tabs
         self._tabs = QTabWidget()
         outer.addWidget(self._tabs, 1)
 
-        self._party_tab = CharacterGroupTab(self._state, "party")
-        self._encounter_tab = CharacterGroupTab(self._state, "mob")
-        self._npc_tab = CharacterGroupTab(self._state, "npc")
+        self._gcl_tab = GlobalCharacterListTab(self._state)
+        self._enc_tab = EncounterTab(self._state)
         self._lists_tab = GlobalListsTab(self._state)
         self._log_tab = CombatLogTab(self._state)
-
-        self._tabs.addTab(self._party_tab, "Party")
-        self._tabs.addTab(self._encounter_tab, "Encounters")
-        self._tabs.addTab(self._npc_tab, "NPCs")
+        self._tabs.addTab(self._gcl_tab, "Global Character List")
+        self._tabs.addTab(self._enc_tab, "Encounters")
         self._tabs.addTab(self._lists_tab, "Global Lists")
         self._tabs.addTab(self._log_tab, "Combat && Change Log")
 
-        # Status bar
+        # Scaling modifiers dock (developer view)
+        self._modifier_dock = QDockWidget("Scaling Modifiers", self)
+        self._modifier_dock.setAllowedAreas(
+            Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
+        self._modifier_panel = ScalingModifiersPanel(self._state)
+        self._modifier_panel.setMinimumWidth(560)
+        self._modifier_dock.setWidget(self._modifier_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._modifier_dock)
+        self._modifier_dock.setVisible(False)
+
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready")
 
@@ -69,16 +92,17 @@ class MainWindow(QMainWindow):
 
         self._state.log_appended.connect(self._refresh_total_turns)
         self._state.lists_changed.connect(self._refresh_campaign_label)
-        self._state.character_changed.connect(lambda _id: self._refresh_total_turns({}))
+        self._state.encounter_changed.connect(self._refresh_total_turns_ignore)
+        self._state.view_mode_changed.connect(self._refresh_view_mode)
 
         self._state.start_autosave()
         self._refresh_total_turns({})
+        self._refresh_view_mode()
 
-        # Crash recovery prompt
+        # Crash recovery
         latest = self._state.latest_autosave()
         if latest is not None and latest.exists():
             try:
-                QMessageBox  # noqa - just to ensure import
                 reply = QMessageBox.question(
                     self, "Restore?",
                     f"An auto-save was found at\n{latest}\nLoad it?",
@@ -91,9 +115,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    # ------------------------------------------------------------------
-    # Menus
-    # ------------------------------------------------------------------
+    def _refresh_total_turns_ignore(self) -> None:
+        self._refresh_total_turns({})
+
     def _build_menus(self) -> None:
         m_file = self.menuBar().addMenu("&File")
         a_new = QAction("&New", self)
@@ -113,7 +137,6 @@ class MainWindow(QMainWindow):
         a_quit = QAction("&Quit", self)
         a_quit.setShortcut(QKeySequence("Ctrl+Q"))
         a_quit.triggered.connect(self.close)
-
         m_file.addAction(a_new)
         m_file.addAction(a_open)
         m_file.addSeparator()
@@ -128,6 +151,12 @@ class MainWindow(QMainWindow):
         a_campaign.triggered.connect(self._on_campaign_settings)
         m_edit.addAction(a_campaign)
 
+        m_view = self.menuBar().addMenu("&View")
+        a_dev = QAction("Toggle &Developer View", self)
+        a_dev.setShortcut(QKeySequence("Ctrl+D"))
+        a_dev.triggered.connect(self._state.toggle_developer_view)
+        m_view.addAction(a_dev)
+
         m_help = self.menuBar().addMenu("&Help")
         a_about = QAction("&About", self)
         a_about.triggered.connect(self._on_about)
@@ -136,9 +165,6 @@ class MainWindow(QMainWindow):
         m_help.addAction(a_changelog)
         m_help.addAction(a_about)
 
-    # ------------------------------------------------------------------
-    # File actions
-    # ------------------------------------------------------------------
     def _on_new(self) -> None:
         reply = QMessageBox.question(
             self, "New Campaign",
@@ -148,17 +174,18 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             from models import AppState
-            from state import BACKUP_DIR
+            from state import BACKUP_DIR, serialize_app_state
             import json, time
             try:
-                from state import serialize_app_state
                 (BACKUP_DIR / f"backup_{int(time.time())}.json").write_text(
                     json.dumps(serialize_app_state(self._state.state, save_name="pre_new"),
                                indent=2))
             except OSError:
                 pass
             self._state.state = AppState()
+            self._state._apply_modifiers_to_engine()
             self._state.lists_changed.emit()
+            self._state.encounter_changed.emit()
             self._refresh_total_turns({})
             self.statusBar().showMessage("New campaign started", 3000)
 
@@ -207,17 +234,14 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
 
-    # ------------------------------------------------------------------
-    # Campaign settings
-    # ------------------------------------------------------------------
     def _on_campaign_settings(self) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle("Campaign Settings")
         v = QVBoxLayout(dlg)
-        from PyQt6.QtWidgets import QLineEdit, QFormLayout
         form = QFormLayout()
         name_in = QLineEdit(self._state.state.campaign_name)
-        sess_in = QSpinBox(); sess_in.setRange(0, 99999)
+        sess_in = QSpinBox()
+        sess_in.setRange(0, 99999)
         sess_in.setValue(self._state.state.session_number)
         notes_in = QPlainTextEdit(self._state.state.campaign_notes)
         notes_in.setFixedHeight(120)
@@ -225,22 +249,21 @@ class MainWindow(QMainWindow):
         form.addRow("Session #:", sess_in)
         form.addRow("Notes:", notes_in)
         v.addLayout(form)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         v.addWidget(bb)
-        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._state.state.campaign_name = name_in.text()
             self._state.state.session_number = sess_in.value()
             self._state.state.campaign_notes = notes_in.toPlainText()
             self._refresh_campaign_label()
 
-    # ------------------------------------------------------------------
-    # About / Changelog
-    # ------------------------------------------------------------------
     def _on_about(self) -> None:
         QMessageBox.about(
             self, "About DnD Manager",
-            "DnD Manager v3\n\n"
+            "DnD Manager v3.1\n\n"
             "A solo Dungeon Master's tool for a homebrew dark-fantasy TTRPG.\n\n"
             "Targets KDE Plasma on Wayland (X11 fallback) on Linux.\n"
             "No dice rolling, no networking, no AI."
@@ -261,17 +284,16 @@ class MainWindow(QMainWindow):
         dlg.setWindowTitle("Changelog")
         dlg.resize(700, 500)
         v = QVBoxLayout(dlg)
-        edit = QPlainTextEdit(text); edit.setReadOnly(True)
+        edit = QPlainTextEdit(text)
+        edit.setReadOnly(True)
         v.addWidget(edit)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         v.addWidget(bb)
-        bb.rejected.connect(dlg.reject); bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
         bb.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dlg.accept)
         dlg.exec()
 
-    # ------------------------------------------------------------------
-    # Status updates
-    # ------------------------------------------------------------------
     def _refresh_total_turns(self, _entry: dict) -> None:
         self._total_turn_label.setText(str(self._state.state.total_turns))
 
@@ -280,9 +302,13 @@ class MainWindow(QMainWindow):
         sess = self._state.state.session_number
         self._campaign_label.setText(f"{name} — session {sess}")
 
-    # ------------------------------------------------------------------
-    # Window lifecycle
-    # ------------------------------------------------------------------
+    def _refresh_view_mode(self) -> None:
+        is_dev = self._state.state.developer_view
+        self._modifier_dock.setVisible(is_dev)
+        self._view_chip.setText("Developer view" if is_dev else "DM view")
+        self._view_chip.setStyleSheet(
+            "color: #aa8f66; font-weight: bold;" if is_dev else "color: #888888;")
+
     def closeEvent(self, event) -> None:
         try:
             self._state.autosave()

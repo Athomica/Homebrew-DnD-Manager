@@ -1,8 +1,13 @@
-"""Pure math engine for DnDManager v3. No Qt imports.
+"""Pure math engine for DnDManager v3.1. No Qt imports.
 
-All formulas from Section 5 of the project brief. The numeric constants here
+All formulas from Section 5 of the v3 project brief. The numeric constants
 (e.g. 79.4883220537, the tier breakpoints, the Luck 0.1/0.2 split) are
-sacred - they match the reference spreadsheet and must not be tweaked.
+sacred - they match the reference spreadsheet and must not be tweaked
+at compile time. However, v3.1 introduces a *modifier* layer that allows
+the user to nudge these values at runtime via the Developer view.
+
+When the modifier dict is empty (or contains only zeros), this module
+produces identical results to the v3 reference.
 """
 from __future__ import annotations
 
@@ -11,8 +16,31 @@ from typing import Optional
 
 from models import (
     Character, Weapon, Armor, Form,
-    PROFICIENCIES,
+    PROFICIENCIES, MODIFIER_DEFS,
 )
+
+
+# ---------------------------------------------------------------------------
+# Modifier layer
+# ---------------------------------------------------------------------------
+
+_MODIFIERS: dict[str, float] = {}
+
+
+def set_modifiers(mods: dict[str, float]) -> None:
+    """Install the global modifier offset dict. Pass {} to reset."""
+    global _MODIFIERS
+    _MODIFIERS = dict(mods) if mods else {}
+
+
+def _eff(key: str) -> float:
+    """Return the effective value (default + offset) for a modifier key."""
+    default, _is_int, _label = MODIFIER_DEFS[key]
+    return default + _MODIFIERS.get(key, 0)
+
+
+def _eff_int(key: str) -> int:
+    return int(round(_eff(key)))
 
 
 # ---------------------------------------------------------------------------
@@ -36,11 +64,11 @@ def level(total_sp: int) -> int:
 # ---------------------------------------------------------------------------
 
 def vital_max(lvl: int) -> int:
-    return 250 + lvl * 50
+    return _eff_int("vital_max_base") + lvl * _eff_int("vital_max_per_level")
 
 
 # ---------------------------------------------------------------------------
-# Section 5.4 - Dice Bonus (the heart of the system)
+# Section 5.4 - Dice Bonus
 # ---------------------------------------------------------------------------
 
 def tier_sum(sp: float, prof_name: str) -> float:
@@ -48,17 +76,24 @@ def tier_sum(sp: float, prof_name: str) -> float:
 
     Luck uses 0.1 in tier 1 (deliberately nerfed); all others use 0.2.
     """
-    tier1 = 0.1 if prof_name == "luck" else 0.2
-    s = min(sp, 15) * tier1
-    s += max(min(sp, 51) - 15, 0) * 0.05
-    s += max(min(sp, 189) - 51, 0) * 0.025
-    s += max(min(sp, 200) - 189, 0) * 0.05
+    tier1 = _eff("tier1_mult_luck") if prof_name == "luck" else _eff("tier1_mult")
+    tier2 = _eff("tier2_mult")
+    tier3 = _eff("tier3_mult")
+    tier4 = _eff("tier4_mult")
+    cap1 = _eff("tier1_cap")
+    cap2 = _eff("tier2_cap")
+    cap3 = _eff("tier3_cap")
+
+    s = min(sp, cap1) * tier1
+    s += max(min(sp, cap2) - cap1, 0) * tier2
+    s += max(min(sp, cap3) - cap2, 0) * tier3
+    s += max(min(sp, 200) - cap3, 0) * tier4
     return s
 
 
 def dice_multiplier(dice: int, luck_tier_sum: float) -> float:
     """Luck-modified dice multiplier. Applies to ALL proficiency bonuses."""
-    divisor = max(14, 27 - luck_tier_sum)
+    divisor = max(_eff("luck_divisor_floor"), _eff("luck_divisor_base") - luck_tier_sum)
     return min(2, (dice - 1) / divisor)
 
 
@@ -68,13 +103,10 @@ def dice_bonus(sp: float, prof_name: str, dice: int, luck_tier_sum: float) -> fl
 
 
 # ---------------------------------------------------------------------------
-# Section 5.5 - Throw Result (with stupidity floor)
+# Section 5.5 - Throw Result
 # ---------------------------------------------------------------------------
 
 def throw_result(sp: float, dice: int, dice_bonus_val: float) -> float:
-    """Combines dice + bonus, with a clause that prevents low-SP characters
-    from getting any bonus on low rolls.
-    """
     if ((sp <= 39 and dice <= 5) or
         (sp <= 99 and dice <= 4) or
         (sp <= 189 and dice <= 3) or
@@ -101,7 +133,7 @@ def is_critical(throw: float, sp: float) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Section 5.7 - DEF current and DEF value
+# Section 5.7 - DEF
 # ---------------------------------------------------------------------------
 
 def def_current(armor_pieces: list[Armor]) -> int:
@@ -110,7 +142,6 @@ def def_current(armor_pieces: list[Armor]) -> int:
 
 def def_value(armor_base: int, armor_throw: float, armor_sp: float,
               armor_form_mult: float, dice: int) -> float:
-    # Step 1: Basis (armor base scaled by throw result)
     if dice == 20:
         basis = armor_base * 2.5
     elif armor_throw == 20:
@@ -121,7 +152,6 @@ def def_value(armor_base: int, armor_throw: float, armor_sp: float,
         basis = armor_base * (1 + (armor_throw - 10) * 0.05)
     basis = round_to_half(basis)
 
-    # Step 2: Percentage bonus from Armor SP
     if armor_throw <= 1 or armor_sp == 1:
         prozent = 0.0
     else:
@@ -138,7 +168,7 @@ def def_value(armor_base: int, armor_throw: float, armor_sp: float,
 
 
 # ---------------------------------------------------------------------------
-# Section 5.8 - ATK current and ATK values
+# Section 5.8 - ATK
 # ---------------------------------------------------------------------------
 
 def atk_current(active_weapon: Optional[Weapon]) -> int:
@@ -148,11 +178,6 @@ def atk_current(active_weapon: Optional[Weapon]) -> int:
 def _generic_atk(weapon_damage: int, prof_throw: float, prof_sp: float,
                  prof_form_mult: float, dice: int,
                  extra_prozent: float = 0.0) -> float:
-    """Shared body for martial / arcana / ranged / stealth attack values.
-    Same structure as def_value, with an optional extra percentage term
-    (used by ranged for the Perception sqrt bonus).
-    """
-    # Step 1: basis
     if dice == 20:
         basis = weapon_damage * 2.5
     elif prof_throw == 20:
@@ -163,7 +188,6 @@ def _generic_atk(weapon_damage: int, prof_throw: float, prof_sp: float,
         basis = weapon_damage * (1 + (prof_throw - 10) * 0.05)
     basis = round_to_half(basis)
 
-    # Step 2: percentage bonus from proficiency
     if prof_throw <= 1 or prof_sp == 1:
         prozent = 0.0
     else:
@@ -200,10 +224,6 @@ def ranged_atk(weapon_damage: int, ranged_throw: float, ranged_sp: float,
                         ranged_form_mult, dice, extra_prozent=extra)
 
 
-# ---------------------------------------------------------------------------
-# Section 5.9 - Stealth ATK
-# ---------------------------------------------------------------------------
-
 def stealth_atk(weapon_damage: int, stealth_throw: float, stealth_sp: float,
                 stealth_form_mult: float, dice: int) -> float:
     return _generic_atk(weapon_damage, stealth_throw, stealth_sp,
@@ -211,7 +231,7 @@ def stealth_atk(weapon_damage: int, stealth_throw: float, stealth_sp: float,
 
 
 # ---------------------------------------------------------------------------
-# Section 5.10 - Dodge Value
+# Section 5.10 - Dodge
 # ---------------------------------------------------------------------------
 
 def dodge_value(armor_throw: float, acro_throw: float,
@@ -246,7 +266,7 @@ def fall_damage(fall_height: float, acro_sp: float, armor_sp: float,
 
     acro_denom = 1 + 0.5 * math.log(max(acro_sp, 1))
 
-    raw = 79.4883220537 * math.log(
+    raw = _eff("fall_damage_const") * math.log(
         1 + height_after_acro * armor_factor / dodge_factor
     ) / acro_denom
 
@@ -287,12 +307,14 @@ def sp_earned(solo_kp: int, total_kp: int, participants: int, current_level: int
     base = solo_kp + (total_kp / participants) * (
         1 + math.log(1 + total_kp / 100) / 20 * math.log(1 + participants)
     )
-    scaled = (0.05 / (1 + 0.05 * current_level)) * base
+    sb = _eff("sp_earned_scaling_base")
+    sf = _eff("sp_earned_scaling_factor")
+    scaled = (sb / (1 + sf * current_level)) * base
     return round_to_half(scaled)
 
 
 # ---------------------------------------------------------------------------
-# Higher-level helpers: derive all values for a Character at once.
+# Helpers: derive views
 # ---------------------------------------------------------------------------
 
 def luck_tier_sum_for(character: Character) -> float:
@@ -300,7 +322,6 @@ def luck_tier_sum_for(character: Character) -> float:
 
 
 def derive_proficiency_view(character: Character) -> dict[str, dict[str, float]]:
-    """Return a dict keyed by proficiency name with computed bonus/throw/crit."""
     out: dict[str, dict[str, float]] = {}
     lts = luck_tier_sum_for(character)
     dice = character.dice
@@ -319,8 +340,8 @@ def derive_proficiency_view(character: Character) -> dict[str, dict[str, float]]
 
 def derive_combat_view(character: Character,
                        weapons: list[Weapon],
-                       armors: list[Armor]) -> dict[str, float]:
-    """Returns DEF/ATK/dodge/fall/hp_loss for the current character state."""
+                       armors: list[Armor],
+                       items: Optional[list] = None) -> dict[str, float]:
     profs = derive_proficiency_view(character)
     armor_throw = profs["armor"]["throw"]
     armor_sp_eff = character.effective_sp("armor")
@@ -331,11 +352,10 @@ def derive_combat_view(character: Character,
     weapon = character.get_active_weapon(weapons)
     weapon_damage = weapon.damage if weapon else 0
 
-    filled = character.filled_inventory_slots([])  # items list handled by caller for slot calc
-    # We need the actual item list for filled slot calc:
-    # Caller is responsible for invoking with full state; we provide an overload below.
-    # For convenience here, we approximate by trusting the entries' quantities.
-    filled = sum(e.quantity for e in character.inventory)
+    if items is not None:
+        filled = character.filled_inventory_slots(items)
+    else:
+        filled = sum(e.quantity for e in character.inventory)
 
     dodge = dodge_value(armor_throw, profs["acrobatics"]["throw"],
                         armor_sp_eff, character.effective_sp("acrobatics"),
@@ -383,3 +403,11 @@ def derive_combat_view(character: Character,
         "hp_loss": hp,
         "shielded_hp_loss": shp,
     }
+
+
+# v3.1 helper: how much vital max would be gained if X SP were added to the
+# character's proficiency total?
+def vital_max_gain_from_sp(current_total_sp: int, added_sp: float) -> int:
+    cur_level = level(current_total_sp)
+    new_level = level(int(round(current_total_sp + added_sp)))
+    return vital_max(new_level) - vital_max(cur_level)

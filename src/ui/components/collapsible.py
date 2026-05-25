@@ -1,7 +1,15 @@
-"""Collapsible section widget."""
+"""Collapsible section widget with optional state persistence callback
+and a 150-200ms ease-out height animation.
+
+v3.1 Sections 1.6 (collapse persistence) and 1.10 (animations).
+"""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from typing import Callable, Optional
+
+from PyQt6.QtCore import (
+    Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation,
+)
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QToolButton, QFrame, QLabel,
     QSizePolicy,
@@ -9,31 +17,41 @@ from PyQt6.QtWidgets import (
 
 
 class CollapsibleSection(QFrame):
-    """A simple header-with-toggle, expandable body container."""
+    """A header-with-toggle, expandable body container with animation
+    and an optional on-toggle callback for state persistence."""
+
+    ANIM_MS = 180
 
     def __init__(self, title: str, parent: QWidget | None = None,
-                 starts_open: bool = True) -> None:
+                 starts_open: bool = True,
+                 on_toggled: Optional[Callable[[bool], None]] = None) -> None:
         super().__init__(parent)
         self.setObjectName("CollapsibleSection")
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self._on_toggled = on_toggled
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(4)
+        outer.setContentsMargins(0, 4, 0, 4)
+        outer.setSpacing(6)
 
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(6)
         self._toggle = QToolButton()
         self._toggle.setText("")
         self._toggle.setCheckable(True)
         self._toggle.setChecked(starts_open)
-        self._toggle.setArrowType(Qt.ArrowType.DownArrow if starts_open else Qt.ArrowType.RightArrow)
+        self._toggle.setArrowType(Qt.ArrowType.DownArrow if starts_open
+                                   else Qt.ArrowType.RightArrow)
         self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._toggle.setAutoRaise(True)
         self._toggle.clicked.connect(self._on_toggle)
 
         self._title = QLabel(title)
         self._title.setProperty("role", "header")
+        # Make the title label clickable too
+        self._title.mousePressEvent = lambda _ev: self._toggle.click()
+        self._title.setCursor(Qt.CursorShape.PointingHandCursor)
 
         header_row.addWidget(self._toggle)
         header_row.addWidget(self._title)
@@ -43,13 +61,18 @@ class CollapsibleSection(QFrame):
         self._body.setSizePolicy(QSizePolicy.Policy.Expanding,
                                   QSizePolicy.Policy.Preferred)
         self._body_layout = QVBoxLayout(self._body)
-        self._body_layout.setContentsMargins(6, 4, 6, 6)
-        self._body_layout.setSpacing(6)
+        self._body_layout.setContentsMargins(20, 4, 4, 8)
+        self._body_layout.setSpacing(10)
 
         outer.addLayout(header_row)
         outer.addWidget(self._body)
 
         self._body.setVisible(starts_open)
+        self._body.setMaximumHeight(16777215 if starts_open else 0)
+
+        self._anim = QPropertyAnimation(self._body, b"maximumHeight", self)
+        self._anim.setDuration(self.ANIM_MS)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def body(self) -> QWidget:
         return self._body
@@ -60,8 +83,50 @@ class CollapsibleSection(QFrame):
     def add_layout(self, layout) -> None:
         self._body_layout.addLayout(layout)
 
+    def is_open(self) -> bool:
+        return self._toggle.isChecked()
+
+    def set_open(self, opened: bool, animate: bool = True) -> None:
+        """Programmatically set the open/closed state."""
+        if opened == self._toggle.isChecked():
+            return
+        self._toggle.setChecked(opened)
+        self._apply_open(opened, animate=animate)
+
     def _on_toggle(self) -> None:
         opened = self._toggle.isChecked()
-        self._body.setVisible(opened)
+        self._apply_open(opened, animate=True)
+        if self._on_toggled is not None:
+            self._on_toggled(not opened)  # callback receives "collapsed" bool
+
+    def _apply_open(self, opened: bool, animate: bool) -> None:
         self._toggle.setArrowType(Qt.ArrowType.DownArrow if opened
                                   else Qt.ArrowType.RightArrow)
+        if animate:
+            self._anim.stop()
+            if opened:
+                self._body.setVisible(True)
+                content_h = max(self._body.sizeHint().height(), 60)
+                self._anim.setStartValue(self._body.maximumHeight())
+                self._anim.setEndValue(content_h + 4)
+                try:
+                    self._anim.finished.disconnect()
+                except TypeError:
+                    pass
+                # After expanding, let the body grow naturally
+                self._anim.finished.connect(
+                    lambda: self._body.setMaximumHeight(16777215))
+            else:
+                start = self._body.height()
+                self._anim.setStartValue(start)
+                self._anim.setEndValue(0)
+                try:
+                    self._anim.finished.disconnect()
+                except TypeError:
+                    pass
+                self._anim.finished.connect(
+                    lambda: self._body.setVisible(False))
+            self._anim.start()
+        else:
+            self._body.setVisible(opened)
+            self._body.setMaximumHeight(16777215 if opened else 0)

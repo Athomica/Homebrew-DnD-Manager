@@ -63,7 +63,7 @@ class CombatLogTab(QWidget):
         self._table.setRowCount(0)
         mode = self._filter_combo.currentText()
         cid_to_name: dict[str, str] = {}
-        for group in (self._state.state.party, self._state.state.encounters, self._state.state.npcs):
+        for group in (self._state.state.party, self._state.state.mobs, self._state.state.npcs):
             for c in group:
                 cid_to_name[c.id] = c.name
         for e in self._all_entries():

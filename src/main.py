@@ -6,8 +6,6 @@ import sys
 from pathlib import Path
 
 
-# Belt-and-suspenders: ensure QT_QPA_PLATFORM is set before PyQt6 imports.
-# In frozen mode the runtime hook handles this; in dev mode we set it here.
 if "QT_QPA_PLATFORM" not in os.environ:
     _xdg = os.environ.get("XDG_SESSION_TYPE", "").lower()
     if os.environ.get("WAYLAND_DISPLAY") or _xdg == "wayland":
@@ -16,14 +14,13 @@ if "QT_QPA_PLATFORM" not in os.environ:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 
-# Make `src/` directory importable when running as a script.
 _here = Path(__file__).resolve().parent
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
+from PyQt6.QtWidgets import QApplication, QComboBox
+from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QObject, QEvent
 
 
 _SUPPRESSED_SUBSTRINGS = (
@@ -32,12 +29,23 @@ _SUPPRESSED_SUBSTRINGS = (
 
 
 def _qt_message_handler(msg_type, context, message):  # noqa: ARG001
-    """Filter known harmless Qt log messages; pass the rest to stderr."""
     for s in _SUPPRESSED_SUBSTRINGS:
         if s in message:
             return
     if msg_type in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
         sys.stderr.write(f"[Qt] {message}\n")
+
+
+class _NoWheelFilter(QObject):
+    """Global event filter: swallow wheel events on QComboBox widgets so
+    the user can scroll the page without accidentally changing a selection.
+    (v3.1 Section 1.3.)"""
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Wheel and isinstance(obj, QComboBox):
+            event.ignore()
+            return True
+        return False
 
 
 def main() -> int:
@@ -47,6 +55,10 @@ def main() -> int:
         app.setStyle("Fusion")
         app.setApplicationName("DnDManager")
         app.setOrganizationName("DnDManager")
+
+        # Global no-wheel filter for combo boxes
+        nw = _NoWheelFilter(app)
+        app.installEventFilter(nw)
 
         from ui.main_window import MainWindow
         from theme import apply_theme
