@@ -61,9 +61,14 @@ class PassiveListEditor(QWidget):
         self._name = QLineEdit()
         self._name.setPlaceholderText("Name")
         self._amount = NoWheelDoubleSpinBox()
-        self._amount.setRange(-10.0, 10.0)
+        self._amount.setRange(-99999.0, 99999.0)
         self._amount.setDecimals(2)
-        self._amount.setSingleStep(0.05)
+        self._amount.setSingleStep(1)
+        # v3.3: scope picker — toggles the "%" suffix on the amount field.
+        self._scope = NoWheelComboBox()
+        self._scope.addItem("fixed", "fixed")
+        self._scope.addItem("percent", "percent")
+        self._scope.currentIndexChanged.connect(self._refresh_amount_suffix)
         self._affected = build_affected_combo()
         self._duration = NoWheelComboBox()
         self._duration.addItems(DURATIONS)
@@ -73,12 +78,14 @@ class PassiveListEditor(QWidget):
         edit_row.addWidget(self._name, 1)
         edit_row.addWidget(QLabel("Amt:"))
         edit_row.addWidget(self._amount)
+        edit_row.addWidget(self._scope)
         edit_row.addWidget(QLabel("Affects:"))
         edit_row.addWidget(self._affected, 1)
         edit_row.addWidget(QLabel("Dur:"))
         edit_row.addWidget(self._duration)
         edit_row.addWidget(self._active)
         outer.addLayout(edit_row)
+        self._refresh_amount_suffix()
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
@@ -101,12 +108,18 @@ class PassiveListEditor(QWidget):
         self._passives = passives
         self._refresh_list()
 
+    def _refresh_amount_suffix(self) -> None:
+        scope = self._scope.currentData()
+        self._amount.setSuffix(" %" if scope == "percent" else "")
+
     def _refresh_list(self) -> None:
         self._list.clear()
         for p in self._passives:
             tag = "[on]" if p.active else "[off]"
-            txt = (f"{tag} {p.name} ({p.amount:+.2f} on {p.affected_value or '?'}, "
-                   f"{p.duration}, src={p.source})")
+            scope = getattr(p, "scope", "fixed")
+            unit = "%" if scope == "percent" else ""
+            txt = (f"{tag} {p.name} ({p.amount:+.2f}{unit} on "
+                   f"{p.affected_value or '?'}, {p.duration}, src={p.source})")
             item = QListWidgetItem(txt)
             self._list.addItem(item)
 
@@ -127,6 +140,9 @@ class PassiveListEditor(QWidget):
         p = self._passives[row]
         self._name.setText(p.name)
         self._amount.setValue(p.amount)
+        scope = getattr(p, "scope", "fixed")
+        self._scope.setCurrentIndex(0 if scope == "fixed" else 1)
+        self._refresh_amount_suffix()
         self._select_affected(p.affected_value)
         idx = DURATIONS.index(p.duration) if p.duration in DURATIONS else 0
         self._duration.setCurrentIndex(idx)
@@ -135,6 +151,7 @@ class PassiveListEditor(QWidget):
     def _on_add(self) -> None:
         p = Passive(name=self._name.text() or "New Passive",
                     amount=self._amount.value(),
+                    scope=self._scope.currentData() or "fixed",
                     affected_value=self._current_affected_text(),
                     duration=self._duration.currentText(),
                     source=self._source_default,
@@ -159,6 +176,7 @@ class PassiveListEditor(QWidget):
         p = self._passives[row]
         p.name = self._name.text() or p.name
         p.amount = self._amount.value()
+        p.scope = self._scope.currentData() or "fixed"
         p.affected_value = self._current_affected_text()
         p.duration = self._duration.currentText()
         p.active = self._active.isChecked()

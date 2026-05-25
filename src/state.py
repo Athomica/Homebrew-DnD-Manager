@@ -18,7 +18,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 
 import math_engine as me
 from models import (
-    AppState, Character, Weapon, Armor, Spell, Item, Form,
+    AppState, Character, Weapon, Armor, Spell, SpellEffect, Item, Form,
     Passive, InventoryEntry, Encounter, EncounterInstance,
     MODIFIER_DEFS, new_id,
 )
@@ -46,7 +46,7 @@ for d in (SAVES_DIR, AUTOSAVE_DIR, BACKUP_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 # ---------------------------------------------------------------------------
@@ -86,8 +86,15 @@ def _hydrate_armor(d: dict) -> Armor:
     return Armor(**kwargs)
 
 
+def _hydrate_spell_effect(d: dict) -> SpellEffect:
+    return _from_dataclass(SpellEffect, d)
+
+
 def _hydrate_spell(d: dict) -> Spell:
-    return _from_dataclass(Spell, d)
+    fields = {f.name for f in dataclasses.fields(Spell)}
+    kwargs = {k: v for k, v in d.items() if k in fields and k != "effects"}
+    kwargs["effects"] = [_hydrate_spell_effect(e) for e in d.get("effects", [])]
+    return Spell(**kwargs)
 
 
 def _hydrate_item(d: dict) -> Item:
@@ -175,6 +182,35 @@ def _migrate_4_to_5(d: dict) -> dict:
     return d
 
 
+def _migrate_5_to_6(d: dict) -> dict:
+    """v5 -> v6: spell effect list; encounter action fields; v3.3 niceties.
+    For each spell with legacy `damage > 0`, synthesize a single Destruction
+    effect targeting 'damage' so the new arcana ATK calc keeps working."""
+    for s in d.get("spells", []):
+        s.setdefault("effects", [])
+        s.setdefault("school", "Destruction")
+        if not s["effects"] and s.get("damage", 0):
+            s["effects"] = [{
+                "id": f"se_{s.get('id', 'sp')}",
+                "target": "damage",
+                "scope": "fixed",
+                "amount": s["damage"],
+                "duration": "single",
+                "affected_by_throw": False,
+                "affected_by_proficiency": False,
+            }]
+    ae = d.get("active_encounter")
+    if ae is not None:
+        ae.setdefault("left_action", "attack")
+        ae.setdefault("right_action", "attack")
+        ae.setdefault("left_apply_fall", False)
+        ae.setdefault("right_apply_fall", False)
+        ae.setdefault("left_pending_item_id", None)
+        ae.setdefault("right_pending_item_id", None)
+    d["schema_version"] = 6
+    return d
+
+
 def hydrate_app_state(d: dict) -> AppState:
     version = d.get("schema_version", SCHEMA_VERSION)
     if version < 4:
@@ -183,6 +219,9 @@ def hydrate_app_state(d: dict) -> AppState:
     if version < 5:
         d = _migrate_4_to_5(d)
         version = 5
+    if version < 6:
+        d = _migrate_5_to_6(d)
+        version = 6
     if version > SCHEMA_VERSION:
         raise ValueError(
             f"Save file schema_version={version} is newer than supported "
@@ -1006,14 +1045,14 @@ class StateManager(QObject):
         return next((s for s in self.state.spells if s.id == sid), None)
 
     def _action_costs(self, character: Character, selection: str) -> tuple[int, int]:
-        """Stamina+mana cost of using `selection` ATK with current equipment."""
+        """Stamina+mana cost of using `selection` ATK with current equipment.
+        Used for the conflict resolution display."""
         w = character.get_active_weapon(self.state.weapons)
         stam = w.stamina_cost if w else 0
         mana = getattr(w, "mana_cost", 0) if w else 0
         if selection == "arcana":
             spell = self._equipped_spell(character)
             if spell is None and character.can_cast_without_staff:
-                # Free-cast: use the character's "selected_spell_id" if any.
                 if character.selected_spell_id:
                     spell = next((s for s in self.state.spells
                                   if s.id == character.selected_spell_id), None)
@@ -1022,8 +1061,159 @@ class StateManager(QObject):
                 mana += spell.mana_cost
         return stam, mana
 
+    # -- v3.3: equipment / inventory swap helpers -----------------------
+    def equip_from_inventory(self, instance_id: str,
+                              inventory_entry_id: str,
+                              slot: str) -> tuple[bool, str]:
+        """Equip a weapon held in this character's inventory to a slot.
+        slot: 'primary' | 'secondary' | 'shield'. The previously-equipped
+        weapon (if any) is moved into the inventory."""
+        inst = self.get_instance(instance_id)
+        char = inst.character if inst else None
+        if char is None:
+            # Allow operating on a global character too
+            char = self.find_character(instance_id)
+        if char is None:
+            return False, "character not found"
+        entry = next((e for e in char.inventory if e.id == inventory_entry_id),
+                     None)
+        if entry is None or not entry.weapon_id:
+            return False, "no weapon at that inventory entry"
+        if slot not in ("primary", "secondary", "shield"):
+            return False, "bad slot"
+        prev_attr = {"primary": "primary_weapon_id",
+                     "secondary": "secondary_weapon_id",
+                     "shield": "shield_id"}[slot]
+        prev_wid = getattr(char, prev_attr)
+        # Swap: equip the new, move the old to inventory.
+        setattr(char, prev_attr, entry.weapon_id)
+        entry.weapon_id = prev_wid  # may be None — entry then becomes empty
+        if entry.weapon_id is None and not entry.item_id and not entry.title:
+            char.inventory.remove(entry)
+        self.encounter_changed.emit()
+        self.character_changed.emit(char.id)
+        return True, "ok"
+
+    def swap_primary_secondary(self, instance_id: str) -> None:
+        inst = self.get_instance(instance_id)
+        char = inst.character if inst else self.find_character(instance_id)
+        if char is None:
+            return
+        char.using_primary = not char.using_primary
+        self.encounter_changed.emit()
+        self.character_changed.emit(char.id)
+
+    def set_equipment(self, instance_id: str, slot: str,
+                       value: Optional[str]) -> None:
+        """Set primary_weapon_id / secondary_weapon_id / shield_id /
+        helmet_id / etc. directly. Used by the encounter card's dropdowns."""
+        inst = self.get_instance(instance_id)
+        char = inst.character if inst else self.find_character(instance_id)
+        if char is None:
+            return
+        attr_map = {
+            "primary": "primary_weapon_id",
+            "secondary": "secondary_weapon_id",
+            "shield": "shield_id",
+            "helmet": "helmet_id",
+            "chest": "chest_id",
+            "gloves": "gloves_id",
+            "pants": "pants_id",
+            "boots": "boots_id",
+            "primary_spell": "primary_spell_id",
+            "secondary_spell": "secondary_spell_id",
+        }
+        if slot not in attr_map:
+            return
+        setattr(char, attr_map[slot], value)
+        self.encounter_changed.emit()
+        self.character_changed.emit(char.id)
+
+    # -- v3.3: spell effect application --------------------------------
+    def _apply_spell_effects(self, spell: Spell, caster: Character,
+                              target: Character) -> list[str]:
+        """Apply each effect on the spell. School determines target:
+        - Destruction: 'damage' effects feed Arcana ATK (handled elsewhere);
+          'hp/stamina/mana' effects are applied to target as positive damage
+          (subtracted from current).
+        - Restoration: effects apply to caster as healing/buffs.
+        - Alteration: effects apply to caster as buffs.
+        - Illusion: effects apply to target as debuffs.
+        - Conjuration: log only.
+        Returns a list of log strings describing what happened.
+        """
+        msgs = []
+        school = getattr(spell, "school", "Destruction") or "Destruction"
+        effects = list(getattr(spell, "effects", []) or [])
+        if not effects and getattr(spell, "damage", 0) and school == "Destruction":
+            # Legacy fallback
+            effects = [SpellEffect(target="damage", scope="fixed",
+                                    amount=float(spell.damage),
+                                    duration="single")]
+        recipient = (caster if school in ("Restoration", "Alteration")
+                     else target)
+        for eff in effects:
+            amt = me.spell_effect_amount(eff, caster)
+            sign = +1 if school in ("Restoration", "Alteration") else -1
+            if eff.target == "damage":
+                # Destruction damage is already in arcana ATK; skip here so
+                # we don't double-count.
+                continue
+            if eff.target in ("hp", "stamina", "mana"):
+                attr_cur = {"hp": "health_current",
+                             "stamina": "stamina_current",
+                             "mana": "mana_current"}[eff.target]
+                attr_max = {"hp": "health_max",
+                             "stamina": "stamina_max",
+                             "mana": "mana_max"}[eff.target]
+                cur = getattr(recipient, attr_cur)
+                mx = getattr(recipient, attr_max)
+                delta = int(round(amt)) * sign
+                if eff.scope == "percent":
+                    delta = int(round(mx * (amt / 100.0))) * sign
+                new = max(0, min(mx, cur + delta))
+                setattr(recipient, attr_cur, new)
+                msgs.append(f"{recipient.name}: {eff.target}{delta:+d}")
+            elif eff.target in ("health_max", "stamina_max", "mana_max"):
+                cur = getattr(recipient, eff.target)
+                delta = int(round(amt)) * sign
+                if eff.scope == "percent":
+                    delta = int(round(cur * (amt / 100.0))) * sign
+                new = max(50, cur + delta)
+                setattr(recipient, eff.target, new)
+                msgs.append(f"{recipient.name}: {eff.target}{delta:+d}")
+            elif eff.target.endswith("_sp"):
+                # Proficiency buff/debuff — add a transient Passive entry
+                # rather than mutating SP directly, so the original SP value
+                # is preserved when the duration expires.
+                ptr = recipient
+                p = Passive(name=f"{spell.name} ({eff.target})",
+                             amount=amt * sign,
+                             affected_value=eff.target,
+                             duration=eff.duration,
+                             source=f"spell:{spell.id}",
+                             active=True)
+                ptr.passives.append(p)
+                msgs.append(f"{ptr.name}: passive {p.name} {p.amount:+.1f}")
+        return msgs
+
+    def _outgoing_damage(self, character: Character, selection: str) -> float:
+        cb = me.derive_combat_view(
+            character, self.state.weapons, self.state.armors, self.state.items,
+            spell=self._equipped_spell(character))
+        return cb.get(f"{selection}_atk", 0)
+
+    def _opponent_throw(self, opponent: Character) -> float:
+        """Best-case opponent throw — used as the bar a dodge needs to beat.
+        We use the opponent's highest of (martial, ranged, arcana, stealth)
+        throw values."""
+        profs = me.derive_proficiency_view(opponent)
+        return max(profs["martial"]["throw"], profs["ranged"]["throw"],
+                   profs["arcana"]["throw"], profs["stealth"]["throw"])
+
     def resolve_conflict(self) -> str:
-        """Apply conflict-mode damage exchange to both sides. Returns a summary message."""
+        """v3.3: each side picks ONE action. Resolve both actions, apply
+        results, exit conflict mode. Returns a summary message."""
         enc = self.state.active_encounter
         if enc is None or not enc.in_conflict_mode:
             return "no conflict active"
@@ -1032,53 +1222,132 @@ class StateManager(QObject):
         if not left or not right:
             return "missing combatant"
 
-        msgs = []
-        left_dmg = self._atk_value_for_selection(left.character, enc.left_atk_selection) \
-            if not enc.left_is_receiver_only else 0
-        right_dmg = self._atk_value_for_selection(right.character, enc.right_atk_selection) \
-            if not enc.right_is_receiver_only else 0
+        msgs: list[str] = []
+        # Compute each side's outgoing offensive damage based on its action.
+        # Actions: attack, block, cast, dodge, use_item.
+        def damage_from(side: str, char: Character) -> float:
+            action = enc.left_action if side == "left" else enc.right_action
+            if action == "attack":
+                sel = enc.left_atk_selection if side == "left" else enc.right_atk_selection
+                return self._outgoing_damage(char, sel)
+            if action == "cast":
+                spell = self._equipped_spell(char)
+                if spell is None and char.can_cast_without_staff:
+                    if char.selected_spell_id:
+                        spell = next((s for s in self.state.spells
+                                      if s.id == char.selected_spell_id), None)
+                if spell is None:
+                    return 0.0
+                if getattr(spell, "school", "Destruction") != "Destruction":
+                    return 0.0  # non-destruction casts deal no direct damage
+                # Use arcana ATK with this spell as the focus.
+                return self._outgoing_damage(char, "arcana")
+            return 0.0  # block, dodge, use_item deal no offensive damage
 
-        if not enc.left_is_receiver_only and left_dmg > 0:
-            right.character.dmg_received = int(round(left_dmg))
-            cb_r = me.derive_combat_view(right.character, self.state.weapons,
-                                         self.state.armors, self.state.items,
-                                         spell=self._equipped_spell(right.character))
-            shield_r = right.character.get_shield(self.state.weapons)
-            loss = cb_r["shielded_hp_loss"] if shield_r else cb_r["hp_loss"]
-            self.apply_hp_loss(right.character, loss)
-            if shield_r and shield_r.max_defense < right.character.dmg_received:
-                right.character.shield_id = None
-                msgs.append(f"{right.character.name}'s shield broke")
+        left_dmg = damage_from("left", left.character)
+        right_dmg = damage_from("right", right.character)
 
-        if not enc.right_is_receiver_only and right_dmg > 0:
-            left.character.dmg_received = int(round(right_dmg))
-            cb_l = me.derive_combat_view(left.character, self.state.weapons,
-                                         self.state.armors, self.state.items,
-                                         spell=self._equipped_spell(left.character))
-            shield_l = left.character.get_shield(self.state.weapons)
-            loss = cb_l["shielded_hp_loss"] if shield_l else cb_l["hp_loss"]
-            self.apply_hp_loss(left.character, loss)
-            if shield_l and shield_l.max_defense < left.character.dmg_received:
-                left.character.shield_id = None
-                msgs.append(f"{left.character.name}'s shield broke")
+        # --- defenders apply incoming damage according to their own action ---
+        def receive(side: str, defender: Character, attacker: Character,
+                    incoming: float) -> None:
+            if incoming <= 0:
+                return
+            action = enc.left_action if side == "left" else enc.right_action
+            if action == "dodge":
+                # If the defender's dodge value beats the attacker's best
+                # throw, they evade entirely and lose 20 stamina.
+                cb = me.derive_combat_view(
+                    defender, self.state.weapons, self.state.armors,
+                    self.state.items,
+                    spell=self._equipped_spell(defender))
+                dodge_v = cb["dodge"]
+                threshold = self._opponent_throw(attacker)
+                if dodge_v > threshold:
+                    defender.stamina_current = max(0, defender.stamina_current - 20)
+                    msgs.append(
+                        f"{defender.name} dodged (value {dodge_v:.1f} > "
+                        f"opponent throw {threshold:.1f}); -20 stamina")
+                    return
+                # Fall through to full damage if dodge fails.
+            defender.dmg_received = int(round(incoming))
+            cb_def = me.derive_combat_view(
+                defender, self.state.weapons, self.state.armors, self.state.items,
+                spell=self._equipped_spell(defender))
+            if action == "block":
+                shield = defender.get_shield(self.state.weapons)
+                loss = cb_def["shielded_hp_loss"] if shield else cb_def["hp_loss"]
+                self.apply_hp_loss(defender, loss)
+                if shield and shield.max_defense < defender.dmg_received:
+                    defender.shield_id = None
+                    msgs.append(f"{defender.name}'s shield broke")
+                # Block stamina cost
+                if shield:
+                    defender.stamina_current = max(
+                        0, defender.stamina_current - shield.block_cost)
+            else:
+                loss = cb_def["hp_loss"]
+                self.apply_hp_loss(defender, loss)
 
-        # Stamina + mana cost of acting
-        for side_inst, recv_only, selection in (
-            (left, enc.left_is_receiver_only, enc.left_atk_selection),
-            (right, enc.right_is_receiver_only, enc.right_atk_selection),
+        receive("right", right.character, left.character, left_dmg)
+        receive("left", left.character, right.character, right_dmg)
+
+        # --- non-attack actions on each side ---
+        for side, inst, action, attacker in (
+            ("left", left, enc.left_action, right.character),
+            ("right", right, enc.right_action, left.character),
         ):
-            if recv_only:
-                continue
-            stam, mana = self._action_costs(side_inst.character, selection)
-            side_inst.character.stamina_current = max(
-                0, side_inst.character.stamina_current - stam)
-            side_inst.character.mana_current = max(
-                0, side_inst.character.mana_current - mana)
+            if action == "cast":
+                spell = self._equipped_spell(inst.character)
+                if spell is None and inst.character.can_cast_without_staff:
+                    if inst.character.selected_spell_id:
+                        spell = next((s for s in self.state.spells
+                                      if s.id == inst.character.selected_spell_id),
+                                     None)
+                if spell is not None:
+                    other = right.character if side == "left" else left.character
+                    sub_msgs = self._apply_spell_effects(spell, inst.character, other)
+                    msgs.extend(sub_msgs)
+            elif action == "use_item":
+                pid = (enc.left_pending_item_id if side == "left"
+                       else enc.right_pending_item_id)
+                if pid:
+                    ok, msg = self.use_item_in_conflict(side, inst.instance_id, pid)
+                    if ok:
+                        msgs.append(msg)
+                    else:
+                        msgs.append(f"item use failed: {msg}")
+
+        # --- stamina + mana costs for offensive actions ---
+        for side, inst, action in (("left", left, enc.left_action),
+                                    ("right", right, enc.right_action)):
+            if action in ("attack", "cast"):
+                sel = (enc.left_atk_selection if side == "left"
+                       else enc.right_atk_selection) if action == "attack" else "arcana"
+                stam, mana = self._action_costs(inst.character, sel)
+                inst.character.stamina_current = max(
+                    0, inst.character.stamina_current - stam)
+                inst.character.mana_current = max(
+                    0, inst.character.mana_current - mana)
+
+        # --- fall damage (applies independently of action) ---
+        for side, inst in (("left", left), ("right", right)):
+            apply_fall = (enc.left_apply_fall if side == "left"
+                          else enc.right_apply_fall)
+            if apply_fall and inst.character.fall_height > 0:
+                cb = me.derive_combat_view(
+                    inst.character, self.state.weapons, self.state.armors,
+                    self.state.items, spell=self._equipped_spell(inst.character))
+                self.apply_hp_loss(inst.character, cb["fall_damage"])
+                msgs.append(f"{inst.character.name} fell (-{cb['fall_damage']:.1f} HP)")
 
         enc.in_conflict_mode = False
         enc.items_used_left = []
         enc.items_used_right = []
-        msg = "Conflict resolved. " + " ".join(msgs)
+        enc.left_apply_fall = False
+        enc.right_apply_fall = False
+        enc.left_pending_item_id = None
+        enc.right_pending_item_id = None
+        msg = "Conflict resolved. " + " ".join(msgs) if msgs else "Conflict resolved."
         self.log_event("conflict_resolved", msg, category="combat")
         self.encounter_changed.emit()
         return msg

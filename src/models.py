@@ -15,6 +15,8 @@ class Passive:
     id: str = field(default_factory=lambda: new_id("p"))
     name: str = "New Passive"
     amount: float = 0.0
+    # v3.3: 'fixed' or 'percent'. UI shows a "%" suffix for percent.
+    scope: str = "fixed"
     affected_value: str = ""
     duration: str = "permanent"
     source: str = "character"
@@ -50,16 +52,63 @@ class Armor:
 
 
 @dataclass
+class SpellEffect:
+    """A single effect of a spell. A spell can have many.
+
+    target: one of:
+      - 'hp', 'stamina', 'mana'                 (vitals)
+      - 'damage'                                (Destruction-school damage)
+      - 'armor_sp', 'martial_sp', ..., 'luck_sp' (proficiency SP buffs)
+      - 'Strength', 'Agility', 'Mind',
+        'Dexterity', 'Presence'                  (attribute buffs)
+      - 'health_max', 'stamina_max', 'mana_max'  (max vital buffs)
+    scope: 'fixed' or 'percent'. Percent values are 0..100 here.
+    duration: 'single' (one-shot), 'turns:N' (lasts N turns), 'permanent'.
+    affected_by_throw: multiplies the amount by the caster's relevant throw / 10.
+    affected_by_proficiency: multiplies the amount by (1 + arcana_sp/100).
+    """
+    id: str = field(default_factory=lambda: new_id("se"))
+    target: str = "hp"
+    scope: str = "fixed"
+    amount: float = 0.0
+    duration: str = "single"
+    affected_by_throw: bool = False
+    affected_by_proficiency: bool = False
+
+
+SPELL_SCHOOLS = ("Destruction", "Alteration", "Conjuration", "Illusion", "Restoration")
+
+# Targets allowed for each school. Destruction is the only school whose
+# `damage` target feeds Arcana ATK in the combat view.
+SPELL_TARGETS_BY_SCHOOL: dict[str, tuple[str, ...]] = {
+    "Destruction": ("damage", "hp", "stamina", "mana"),
+    "Alteration":  ("armor_sp", "martial_sp", "ranged_sp", "stealth_sp",
+                    "arcana_sp", "perception_sp", "acrobatics_sp",
+                    "lockpicking_sp", "speech_sp", "luck_sp",
+                    "health_max", "stamina_max", "mana_max"),
+    "Conjuration": ("hp", "stamina", "mana"),  # mostly conjures creatures; placeholder
+    "Illusion":    ("armor_sp", "martial_sp", "ranged_sp", "stealth_sp",
+                    "arcana_sp", "perception_sp", "acrobatics_sp",
+                    "lockpicking_sp", "speech_sp", "luck_sp"),
+    "Restoration": ("hp", "stamina", "mana", "health_max",
+                    "stamina_max", "mana_max"),
+}
+
+
+@dataclass
 class Spell:
     id: str = field(default_factory=lambda: new_id("s"))
     name: str = "New Spell"
     mana_cost: int = 0
     stamina_cost: int = 0
-    damage: int = 0
+    damage: int = 0           # legacy single-damage; kept for backwards-compat.
     arcana_level: int = 1
-    potency: str = "/"
-    school: str = ""
+    potency: str = "/"        # legacy descriptive string
+    school: str = "Destruction"
     description: str = ""
+    # v3.3: per-spell effect list. If empty AND school == 'Destruction' AND
+    # damage > 0, a synthetic legacy effect is used.
+    effects: list[SpellEffect] = field(default_factory=list)
 
 
 @dataclass
@@ -104,6 +153,10 @@ class InventoryEntry:
     id: str = field(default_factory=lambda: new_id("inv"))
     title: str = ""
     item_id: Optional[str] = None
+    # v3.3: weapons can sit in the inventory too (counts toward slot usage,
+    # can be equipped via the encounter card). Only one of item_id/weapon_id
+    # should be set per entry.
+    weapon_id: Optional[str] = None
     quantity: int = 1
     notes: str = ""
 
@@ -318,13 +371,17 @@ class Character:
             return af.inventory_slot_override + self.backpack_slots
         return self.base_max_inventory_slots + self.backpack_slots
 
-    def filled_inventory_slots(self, item_list: list[Item]) -> int:
+    def filled_inventory_slots(self, item_list: list[Item],
+                                weapon_list: Optional[list[Weapon]] = None) -> int:
         by_id = {i.id: i for i in item_list}
         total = 0
         for entry in self.inventory:
             slot_cost = 1
             if entry.item_id and entry.item_id in by_id:
                 slot_cost = by_id[entry.item_id].slot_count
+            elif entry.weapon_id and weapon_list is not None:
+                # Weapons take 1 slot each by default.
+                slot_cost = 1
             total += entry.quantity * slot_cost
         return total
 
@@ -366,10 +423,21 @@ class Encounter:
     left_is_receiver_only: bool = False
     right_is_receiver_only: bool = False
 
-    # Per-conflict items used by each side (instance_id -> list of item_ids
-    # used this conflict). Cleared when conflict ends.
+    # Per-conflict items used by each side. Cleared when conflict ends.
     items_used_left: list[str] = field(default_factory=list)
     items_used_right: list[str] = field(default_factory=list)
+
+    # v3.3: Each side picks ONE action per conflict. One of:
+    #   'attack', 'block', 'cast', 'dodge', 'use_item'
+    # 'receiver_only' is still supported via the old flag as a synonym for
+    # 'do nothing offensive' but is no longer the default UI choice.
+    left_action: str = "attack"
+    right_action: str = "attack"
+    # Extra per-side flags
+    left_apply_fall: bool = False
+    right_apply_fall: bool = False
+    left_pending_item_id: Optional[str] = None
+    right_pending_item_id: Optional[str] = None
 
 
 MODIFIER_DEFS: dict[str, tuple[float, bool, str]] = {

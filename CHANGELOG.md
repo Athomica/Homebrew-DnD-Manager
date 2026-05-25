@@ -1,5 +1,88 @@
 # DnD Manager Changelog
 
+## v3.3 — Action-based conflict, spell effect system, inventory in combat
+
+Schema bump: `5 -> 6`. Old saves auto-migrate (legacy `spell.damage` becomes
+a single Destruction `damage` effect).
+
+### Conflict actions (one action per side)
+- Each side now picks exactly one action per conflict: **Attack**, **Block**,
+  **Cast**, **Dodge**, or **Use item**. Equipment + inventory swaps remain
+  unlimited and free.
+- **Attack**: as before, with the ATK type sub-selector (martial/ranged/
+  arcana/stealth).
+- **Block**: needs a shield. Uses shielded HP loss, deducts the shield's
+  block cost in stamina. Shield can still break if `max_defense < incoming`.
+- **Cast**: uses the spell slotted into the active staff/wand (or the
+  character's free-cast spell if they're a "can cast without staff" caster).
+  School determines what happens — see below.
+- **Dodge**: compares the defender's dodge value to the attacker's highest
+  throw. If higher, all incoming damage is evaded and the defender loses
+  20 stamina. If not, full damage is taken.
+- **Use item**: an item from the character's inventory is consumed; its
+  HP/stamina/mana effects are applied before damage subtraction (so a
+  potion can still save you from a fatal blow).
+
+### Spell effect system
+- Each spell now has a **list of effects**. Each effect has:
+  `target` (HP / stamina / mana / damage / proficiency SP / max vital),
+  `scope` (fixed or percent), `amount`, `duration` (single / N turns /
+  permanent), and toggles for "× Arcana proficiency" and "× Arcana
+  throw / 10".
+- **School determines behavior**:
+  - **Destruction**: a `damage` effect feeds Arcana ATK. Other Destruction
+    effects are applied to the target.
+  - **Restoration**: effects apply to the caster (healing / buffs).
+  - **Alteration**: effects apply to the caster (self-buffs like Rage).
+  - **Illusion**: effects apply to the target (debuffs).
+  - **Conjuration**: a placeholder; logged but not yet mechanical.
+- Non-Destruction spells produce **zero Arcana ATK** in the combat view, so
+  a Heal spell will show 0 ATK and never accidentally damages the target.
+- The target dropdown in the spell editor is filtered by the chosen school.
+- The legacy `spell.damage` integer is still synced from the first
+  `damage`-target effect so older tooltips keep working.
+
+### Encounter side cards — tabbed editor
+- The compact character card on each side now has a tab strip with:
+  **Combat** (vitals, ATK/DEF/dodge, fall height + "Apply on resolve"
+  checkbox, shielded HP loss preview),
+  **Equipment** (primary/secondary weapon dropdowns, swap button, "using
+  primary" toggle, spell slots when a staff is equipped, all five armor
+  slots, total armor),
+  **Inventory** (per-entry use/equip/remove, add weapon/item from the
+  global lists, filled/max summary),
+  **Stats** (Kill Points / Solo KP / Participants, recommended KP, SP
+  earned, unallocated SP),
+  **Passives** (full passive editor — permanent passives can be added
+  but the existing permanent ones aren't editable),
+  **Forms** (when applicable — visible only if the character is a
+  shapeshifter or already has forms).
+- Max vitals (HP/Stamina/Mana max) become read-only during a conflict;
+  outside conflict they're editable.
+
+### Weapons in inventory
+- `InventoryEntry` gained a `weapon_id` field. Weapons placed in the
+  inventory take 1 slot each, count toward `filled_inventory_slots`, and
+  can be equipped to primary/secondary/shield with one click. The
+  previously-equipped weapon is swapped back into the inventory.
+- The inventory tab on a side card has dropdowns to add weapons or items
+  directly from the global Equipment List.
+
+### Percent display
+- Damage Negation on weapons is now shown as **5 %** (not 0.05). The model
+  still stores 0..1 so the math engine is unchanged.
+- Passives gained a **scope** dropdown (fixed / percent). When percent is
+  chosen, the amount field gets a "%" suffix.
+- Spell effect amounts use the same toggle (percent values are rounded to
+  non-decimal per spec).
+
+### Misc
+- Latent bug in the Passive editor — amount was clamped to ±10 — fixed.
+- A blocking action also deducts the shield's block cost.
+- Multi-encounter (Phase 6) still deferred.
+
+---
+
 ## v3.2 — Feature pass (Phases 1-5)
 
 Schema bump: `schema_version 4 -> 5`. Old saves migrate automatically.

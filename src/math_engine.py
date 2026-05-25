@@ -18,6 +18,8 @@ from models import (
     Character, Weapon, Armor, Form,
     PROFICIENCIES, MODIFIER_DEFS,
 )
+# Note: Spell is imported lazily inside functions that need it, to keep the
+# original top-level imports lean.
 
 
 # ---------------------------------------------------------------------------
@@ -371,13 +373,17 @@ def derive_combat_view(character: Character,
     martial = martial_atk(weapon_damage, profs["martial"]["throw"],
                           character.effective_sp("martial"),
                           character.form_mult("martial"), character.dice)
-    # v3.2: Arcana uses the equipped spell's damage when a staff/wand is held
-    # (or when can_cast_without_staff is True with a spell selected). The
-    # weapon's own damage is NOT added to the arcana attack — the staff is
-    # purely a focus.
+    # v3.2/v3.3: Arcana uses the equipped spell's damage when a staff/wand is
+    # held (or when can_cast_without_staff is True with a spell selected).
+    # Only Destruction-school spells produce attack damage; other schools set
+    # arcana ATK to 0. Damage value comes from the spell's effect list
+    # (target=='damage') in v3.3; legacy `spell.damage` fallback supported.
     arcana_dmg_input = weapon_damage
-    if spell is not None and getattr(spell, "damage", 0):
-        arcana_dmg_input = spell.damage
+    if spell is not None:
+        if getattr(spell, "school", "Destruction") == "Destruction":
+            arcana_dmg_input = spell_base_damage(spell)
+        else:
+            arcana_dmg_input = 0
     elif weapon is not None and getattr(weapon, "is_staff", False):
         arcana_dmg_input = 0  # staff with no spell selected: no arcana damage
     arcana = arcana_atk(arcana_dmg_input, profs["arcana"]["throw"],
@@ -413,6 +419,59 @@ def derive_combat_view(character: Character,
         "hp_loss": hp,
         "shielded_hp_loss": shp,
     }
+
+
+# ---------------------------------------------------------------------------
+# v3.3 - Spell effect resolution
+# ---------------------------------------------------------------------------
+
+def spell_base_damage(spell) -> float:
+    """Sum of all 'damage'-targeted effects on a Destruction spell, with
+    `scope` resolved (percent values are evaluated against a notional 100,
+    so 50% damage = 50). When the spell has no effect list, fall back to
+    the legacy `spell.damage` integer.
+    """
+    effects = getattr(spell, "effects", None) or []
+    dmg = 0.0
+    saw_effect = False
+    for e in effects:
+        if e.target == "damage":
+            saw_effect = True
+            amt = float(e.amount)
+            if e.scope == "percent":
+                amt = amt  # percent of incoming weapon base — but spell.damage
+                            # base is 100 by convention when scope is percent
+            dmg += amt
+    if saw_effect:
+        return dmg
+    return float(getattr(spell, "damage", 0) or 0)
+
+
+def spell_effect_amount(effect, caster: Character) -> float:
+    """Compute the realized amount for one SpellEffect given the caster's
+    current state (throw result, proficiency). Returns the *absolute* delta
+    to apply to the target attribute.
+
+    Note: this does NOT clamp; the caller is responsible for bounds.
+    """
+    amt = float(effect.amount)
+    if effect.scope == "percent":
+        # Percent rounds to non-decimal per spec.
+        amt = round(amt)
+    if effect.affected_by_throw:
+        # Throw result for arcana proficiency, normalized at /10 so that a
+        # default throw of 10 leaves the value unchanged.
+        try:
+            throw = throw_result(caster.effective_sp("arcana"), caster.dice,
+                                  dice_bonus(caster.effective_sp("arcana"),
+                                             "arcana", caster.dice,
+                                             luck_tier_sum_for(caster)))
+        except Exception:
+            throw = 10.0
+        amt *= max(0.0, throw) / 10.0
+    if effect.affected_by_proficiency:
+        amt *= (1 + caster.effective_sp("arcana") / 100.0)
+    return amt
 
 
 # v3.1 helper: how much vital max would be gained if X SP were added to the

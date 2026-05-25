@@ -11,16 +11,18 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget, QListWidgetItem,
     QTabWidget, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
     QPlainTextEdit, QFormLayout, QGroupBox, QSplitter, QCheckBox,
-    QButtonGroup, QRadioButton,
+    QButtonGroup, QRadioButton, QFrame,
 )
 
 from state import StateManager
-from models import ARMOR_SLOTS
+from models import (
+    ARMOR_SLOTS, SpellEffect, SPELL_SCHOOLS, SPELL_TARGETS_BY_SCHOOL,
+)
 from ui.components.passive_editor import PassiveListEditor
 
 
@@ -96,7 +98,13 @@ class WeaponsListTab(QWidget):
         self._is_staff_in = QCheckBox("Is staff / wand (allows magic use)")
         self._block_in = QSpinBox(); self._block_in.setRange(0, 9999)
         self._max_def_in = QSpinBox(); self._max_def_in.setRange(0, 99999)
-        self._dmg_neg_in = QDoubleSpinBox(); self._dmg_neg_in.setRange(0, 1.0); self._dmg_neg_in.setSingleStep(0.05)
+        # v3.3: damage negation is shown as percent (5 % instead of 0.05).
+        # The model still stores 0..1 to keep the math engine untouched.
+        self._dmg_neg_in = QDoubleSpinBox()
+        self._dmg_neg_in.setRange(0, 100.0)
+        self._dmg_neg_in.setSingleStep(5.0)
+        self._dmg_neg_in.setDecimals(0)
+        self._dmg_neg_in.setSuffix(" %")
         self._level_in = QSpinBox(); self._level_in.setRange(1, 100)
         self._desc_in = QPlainTextEdit(); self._desc_in.setFixedHeight(60)
 
@@ -108,7 +116,7 @@ class WeaponsListTab(QWidget):
         form.addRow("", self._is_staff_in)
         form.addRow("Block Cost:", self._block_in)
         form.addRow("Max Defense:", self._max_def_in)
-        form.addRow("Damage Negation (0..1):", self._dmg_neg_in)
+        form.addRow("Damage Negation:", self._dmg_neg_in)
         form.addRow("Weapon Level:", self._level_in)
         form.addRow("Description:", self._desc_in)
         form_outer.addLayout(form)
@@ -191,7 +199,7 @@ class WeaponsListTab(QWidget):
         self._is_staff_in.setChecked(getattr(w, "is_staff", False))
         self._block_in.setValue(w.block_cost)
         self._max_def_in.setValue(w.max_defense)
-        self._dmg_neg_in.setValue(w.damage_negation)
+        self._dmg_neg_in.setValue(w.damage_negation * 100.0)
         self._level_in.setValue(w.weapon_level)
         self._desc_in.setPlainText(w.description)
         self._passive_editor.load(w.passives)
@@ -210,7 +218,7 @@ class WeaponsListTab(QWidget):
         w.is_staff = self._is_staff_in.isChecked()
         w.block_cost = self._block_in.value()
         w.max_defense = self._max_def_in.value()
-        w.damage_negation = self._dmg_neg_in.value()
+        w.damage_negation = self._dmg_neg_in.value() / 100.0
         w.weapon_level = self._level_in.value()
         w.description = self._desc_in.toPlainText()
         self._state.log_event("weapon_edited", f"Edited weapon '{w.name}'",
@@ -397,12 +405,123 @@ class ArmorListTab(QWidget):
 # Spells
 # ---------------------------------------------------------------------------
 
+class _SpellEffectRow(QFrame):
+    """One row in the spell effect list: target + scope + amount + duration
+    + two toggles for proficiency/throw scaling."""
+
+    changed = pyqtSignal()
+
+    def __init__(self, effect: SpellEffect, school: str,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.effect = effect
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(4)
+
+        row1 = QHBoxLayout(); row1.setSpacing(6)
+        row1.addWidget(QLabel("Target:"))
+        self._target_in = QComboBox()
+        self._populate_targets(school)
+        row1.addWidget(self._target_in, 1)
+        row1.addWidget(QLabel("Scope:"))
+        self._scope_in = QComboBox()
+        self._scope_in.addItem("fixed", "fixed")
+        self._scope_in.addItem("percent (%)", "percent")
+        row1.addWidget(self._scope_in)
+        row1.addWidget(QLabel("Amount:"))
+        self._amount_in = QDoubleSpinBox()
+        self._amount_in.setRange(-99999, 99999)
+        self._amount_in.setDecimals(0)
+        self._amount_in.setSingleStep(1)
+        row1.addWidget(self._amount_in)
+        self._suffix_lbl = QLabel("")
+        row1.addWidget(self._suffix_lbl)
+        outer.addLayout(row1)
+
+        row2 = QHBoxLayout(); row2.setSpacing(6)
+        row2.addWidget(QLabel("Duration:"))
+        self._duration_in = QComboBox()
+        self._duration_in.addItem("Single use", "single")
+        for n in (1, 2, 3, 5, 10):
+            self._duration_in.addItem(f"For {n} turns", f"turns:{n}")
+        self._duration_in.addItem("Permanent", "permanent")
+        row2.addWidget(self._duration_in)
+        self._prof_chk = QCheckBox("× Arcana proficiency")
+        self._throw_chk = QCheckBox("× Arcana throw / 10")
+        row2.addWidget(self._prof_chk)
+        row2.addWidget(self._throw_chk)
+        row2.addStretch(1)
+        self._rm_btn = QPushButton("Remove effect")
+        self._rm_btn.setProperty("role", "danger")
+        row2.addWidget(self._rm_btn)
+        outer.addLayout(row2)
+
+        self._load()
+        self._target_in.currentIndexChanged.connect(self._commit)
+        self._scope_in.currentIndexChanged.connect(self._commit)
+        self._amount_in.valueChanged.connect(self._commit)
+        self._duration_in.currentIndexChanged.connect(self._commit)
+        self._prof_chk.toggled.connect(self._commit)
+        self._throw_chk.toggled.connect(self._commit)
+
+    def _populate_targets(self, school: str) -> None:
+        self._target_in.clear()
+        for t in SPELL_TARGETS_BY_SCHOOL.get(school, ("hp",)):
+            self._target_in.addItem(t, t)
+
+    def update_school(self, school: str) -> None:
+        cur = self.effect.target
+        self._populate_targets(school)
+        # Try to restore the previous target; otherwise fall back to first.
+        for i in range(self._target_in.count()):
+            if self._target_in.itemData(i) == cur:
+                self._target_in.setCurrentIndex(i)
+                break
+        else:
+            self._target_in.setCurrentIndex(0)
+        self._commit()
+
+    def _load(self) -> None:
+        for i in range(self._target_in.count()):
+            if self._target_in.itemData(i) == self.effect.target:
+                self._target_in.setCurrentIndex(i)
+                break
+        idx = 0 if self.effect.scope == "fixed" else 1
+        self._scope_in.setCurrentIndex(idx)
+        self._amount_in.setValue(float(self.effect.amount))
+        for i in range(self._duration_in.count()):
+            if self._duration_in.itemData(i) == self.effect.duration:
+                self._duration_in.setCurrentIndex(i)
+                break
+        self._prof_chk.setChecked(self.effect.affected_by_proficiency)
+        self._throw_chk.setChecked(self.effect.affected_by_throw)
+        self._refresh_suffix()
+
+    def _refresh_suffix(self) -> None:
+        scope = self._scope_in.currentData()
+        self._suffix_lbl.setText("%" if scope == "percent" else "")
+
+    def _commit(self) -> None:
+        self.effect.target = self._target_in.currentData() or "hp"
+        self.effect.scope = self._scope_in.currentData() or "fixed"
+        self.effect.amount = float(self._amount_in.value())
+        self.effect.duration = self._duration_in.currentData() or "single"
+        self.effect.affected_by_proficiency = self._prof_chk.isChecked()
+        self.effect.affected_by_throw = self._throw_chk.isChecked()
+        self._refresh_suffix()
+        self.changed.emit()
+
+
 class SpellsListTab(QWidget):
     def __init__(self, state: StateManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._state = state
         self._current_id: Optional[str] = None
         self._search: str = ""
+        self._effect_rows: list[_SpellEffectRow] = []
+        self._effects_layout: Optional[QVBoxLayout] = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
@@ -422,26 +541,46 @@ class SpellsListTab(QWidget):
         self._list.currentRowChanged.connect(self._on_select)
         split.addWidget(self._list)
 
-        detail = QWidget(); form = QFormLayout(detail)
+        detail = QWidget()
+        d_outer = QVBoxLayout(detail)
+        d_outer.setContentsMargins(0, 0, 0, 0)
+        d_outer.setSpacing(8)
+        form = QFormLayout()
         self._name_in = QLineEdit()
         self._mana_in = QSpinBox(); self._mana_in.setRange(0, 99999)
         self._stamina_in = QSpinBox(); self._stamina_in.setRange(0, 99999)
-        self._damage_in = QSpinBox(); self._damage_in.setRange(0, 99999)
         self._arcana_lvl_in = QSpinBox(); self._arcana_lvl_in.setRange(1, 100)
-        self._potency_in = QLineEdit()
-        self._school_in = QLineEdit()
-        self._desc_in = QPlainTextEdit(); self._desc_in.setFixedHeight(120)
-        apply_btn = QPushButton("Apply"); apply_btn.setProperty("role", "primary")
-        apply_btn.clicked.connect(self._on_apply)
+        self._school_in = QComboBox()
+        for sk in SPELL_SCHOOLS:
+            self._school_in.addItem(sk, sk)
+        self._school_in.currentIndexChanged.connect(self._on_school_changed)
+        self._desc_in = QPlainTextEdit(); self._desc_in.setFixedHeight(80)
         form.addRow("Name:", self._name_in)
+        form.addRow("School:", self._school_in)
         form.addRow("Mana Cost:", self._mana_in)
         form.addRow("Stamina Cost:", self._stamina_in)
-        form.addRow("Damage:", self._damage_in)
         form.addRow("Arcana Level:", self._arcana_lvl_in)
-        form.addRow("Potency:", self._potency_in)
-        form.addRow("School:", self._school_in)
         form.addRow("Description:", self._desc_in)
-        form.addRow("", apply_btn)
+        d_outer.addLayout(form)
+
+        # Effects panel
+        fx_group = QGroupBox("Effects (each effect applies to one target)")
+        fxv = QVBoxLayout(fx_group)
+        fxv.setContentsMargins(8, 14, 8, 8)
+        self._effects_layout = QVBoxLayout()
+        self._effects_layout.setSpacing(4)
+        fxv.addLayout(self._effects_layout)
+        fx_btn_row = QHBoxLayout()
+        add_fx = QPushButton("+ Add effect"); add_fx.setProperty("role", "primary")
+        add_fx.clicked.connect(self._on_add_effect)
+        fx_btn_row.addWidget(add_fx)
+        fx_btn_row.addStretch(1)
+        fxv.addLayout(fx_btn_row)
+        d_outer.addWidget(fx_group, 1)
+
+        apply_btn = QPushButton("Apply"); apply_btn.setProperty("role", "primary")
+        apply_btn.clicked.connect(self._on_apply)
+        d_outer.addWidget(apply_btn)
 
         split.addWidget(detail)
         split.setStretchFactor(0, 1)
@@ -458,13 +597,10 @@ class SpellsListTab(QWidget):
         self._list.blockSignals(True); self._list.clear()
         for s in self._state.state.spells:
             if self._search:
-                if self._search not in s.name.lower() and self._search not in s.school.lower():
+                if (self._search not in s.name.lower()
+                        and self._search not in (s.school or "").lower()):
                     continue
-            dmg = getattr(s, "damage", 0)
-            label = f"{s.name} (mana {s.mana_cost}"
-            if dmg:
-                label += f", dmg {dmg}"
-            label += ")"
+            label = f"{s.name}  [{s.school or '?'}]  (mana {s.mana_cost})"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, s.id)
             self._list.addItem(item)
@@ -475,6 +611,21 @@ class SpellsListTab(QWidget):
             self._list.setCurrentRow(0)
         else:
             self._on_select(self._list.currentRow())
+
+    def _clear_effects(self) -> None:
+        for row in self._effect_rows:
+            row.setParent(None)
+            row.deleteLater()
+        self._effect_rows = []
+
+    def _rebuild_effect_rows(self, spell, school: str) -> None:
+        self._clear_effects()
+        for eff in spell.effects:
+            row = _SpellEffectRow(eff, school)
+            row._rm_btn.clicked.connect(
+                lambda _c, e=eff, sp=spell: self._on_remove_effect(sp, e))
+            self._effects_layout.addWidget(row)
+            self._effect_rows.append(row)
 
     def _on_select(self, row: int) -> None:
         if row < 0:
@@ -490,11 +641,45 @@ class SpellsListTab(QWidget):
         self._name_in.setText(s.name)
         self._mana_in.setValue(s.mana_cost)
         self._stamina_in.setValue(getattr(s, "stamina_cost", 0))
-        self._damage_in.setValue(getattr(s, "damage", 0))
         self._arcana_lvl_in.setValue(s.arcana_level)
-        self._potency_in.setText(s.potency)
-        self._school_in.setText(s.school)
+        school = s.school if s.school in SPELL_SCHOOLS else "Destruction"
+        for i in range(self._school_in.count()):
+            if self._school_in.itemData(i) == school:
+                self._school_in.blockSignals(True)
+                self._school_in.setCurrentIndex(i)
+                self._school_in.blockSignals(False)
+                break
         self._desc_in.setPlainText(s.description)
+        self._rebuild_effect_rows(s, school)
+
+    def _on_school_changed(self) -> None:
+        if not self._current_id:
+            return
+        school = self._school_in.currentData() or "Destruction"
+        for row in self._effect_rows:
+            row.update_school(school)
+
+    def _on_add_effect(self) -> None:
+        if not self._current_id:
+            return
+        s = next((x for x in self._state.state.spells if x.id == self._current_id), None)
+        if not s:
+            return
+        eff = SpellEffect(
+            target=SPELL_TARGETS_BY_SCHOOL.get(
+                s.school or "Destruction", ("hp",))[0],
+            scope="fixed", amount=10, duration="single")
+        s.effects.append(eff)
+        school = self._school_in.currentData() or s.school or "Destruction"
+        row = _SpellEffectRow(eff, school)
+        row._rm_btn.clicked.connect(
+            lambda _c, e=eff, sp=s: self._on_remove_effect(sp, e))
+        self._effects_layout.addWidget(row)
+        self._effect_rows.append(row)
+
+    def _on_remove_effect(self, spell, effect) -> None:
+        spell.effects = [e for e in spell.effects if e.id != effect.id]
+        self._rebuild_effect_rows(spell, self._school_in.currentData() or "Destruction")
 
     def _on_apply(self) -> None:
         if not self._current_id:
@@ -505,12 +690,16 @@ class SpellsListTab(QWidget):
         s.name = self._name_in.text() or s.name
         s.mana_cost = self._mana_in.value()
         s.stamina_cost = self._stamina_in.value()
-        s.damage = self._damage_in.value()
         s.arcana_level = self._arcana_lvl_in.value()
-        s.potency = self._potency_in.text()
-        s.school = self._school_in.text()
+        s.school = self._school_in.currentData() or "Destruction"
         s.description = self._desc_in.toPlainText()
-        self._state.log_event("spell_edited", f"Edited spell '{s.name}'", category="change")
+        # Sync legacy `damage` int from the first 'damage' effect, so older
+        # code paths and tooltips still see a number.
+        dmg_effect = next((e for e in s.effects if e.target == "damage"), None)
+        if dmg_effect is not None:
+            s.damage = int(round(dmg_effect.amount))
+        self._state.log_event("spell_edited", f"Edited spell '{s.name}'",
+                              category="change")
         self._state.lists_changed.emit()
 
     def _on_add(self) -> None:
