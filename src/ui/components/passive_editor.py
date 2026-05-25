@@ -84,7 +84,7 @@ class PassiveListEditor(QWidget):
         btn_row.setSpacing(10)
         self._add_btn = QPushButton("+ Add")
         self._add_btn.setProperty("role", "primary")
-        self._remove_btn = QPushButton("− Remove")
+        self._remove_btn = QPushButton("- Remove")
         self._remove_btn.setProperty("role", "danger")
         self._apply_btn = QPushButton("Apply Edits")
         btn_row.addWidget(self._add_btn)

@@ -86,7 +86,7 @@ class CharacterListSubTab(QWidget):
         self._dup_btn.clicked.connect(self._on_duplicate)
         self._archive_btn = QPushButton("Archive")
         self._archive_btn.clicked.connect(self._on_archive)
-        self._rm_btn = QPushButton("− Remove")
+        self._rm_btn = QPushButton("- Remove")
         self._rm_btn.setProperty("role", "danger")
         self._rm_btn.clicked.connect(self._on_remove)
         toolbar.addWidget(self._add_btn)
@@ -134,34 +134,9 @@ class CharacterListSubTab(QWidget):
 
     def refresh_list(self) -> None:
         self._list.blockSignals(True)
-        self._list.clear()
-        active: list[Character] = []
-        archived: list[Character] = []
-        for c in self._chars():
-            (archived if c.is_deceased else active).append(c)
-
-        for c in active:
-            item = QListWidgetItem(self._label_for(c))
-            item.setData(Qt.ItemDataRole.UserRole, c.id)
-            self._list.addItem(item)
-            if c.id == self._current_id:
-                self._list.setCurrentRow(self._list.count() - 1)
-
-        if archived:
-            sep = QListWidgetItem("— Archived (Deceased) —")
-            sep.setFlags(Qt.ItemFlag.NoItemFlags)
-            sep.setForeground(QBrush(QColor("#888888")))
-            self._list.addItem(sep)
-            for c in archived:
-                item = QListWidgetItem(self._label_for(c))
-                item.setData(Qt.ItemDataRole.UserRole, c.id)
-                item.setForeground(QBrush(QColor("#888888")))
-                self._list.addItem(item)
-                if c.id == self._current_id:
-                    self._list.setCurrentRow(self._list.count() - 1)
+        self._populate_list()
         self._list.blockSignals(False)
         if self._list.currentRow() < 0 and self._list.count() > 0:
-            # Auto-select first selectable
             for i in range(self._list.count()):
                 it = self._list.item(i)
                 if it and it.flags() & Qt.ItemFlag.ItemIsSelectable:
@@ -191,8 +166,40 @@ class CharacterListSubTab(QWidget):
         self._set_sheet(char)
 
     def _on_character_changed(self, _cid: str) -> None:
-        # Names/locks may have changed; refresh list rendering
-        self.refresh_list()
+        # Names/locks may have changed - only re-render the LIST, not the
+        # detail sheet. (The sheet refreshes its own derived values via the
+        # character_changed signal.)
+        cur = self._current_id
+        self._list.blockSignals(True)
+        self._populate_list()
+        self._list.blockSignals(False)
+        # Restore selection without re-creating the sheet
+        self._current_id = cur
+
+    def _populate_list(self) -> None:
+        self._list.clear()
+        active: list[Character] = []
+        archived: list[Character] = []
+        for c in self._chars():
+            (archived if c.is_deceased else active).append(c)
+        for c in active:
+            item = QListWidgetItem(self._label_for(c))
+            item.setData(Qt.ItemDataRole.UserRole, c.id)
+            self._list.addItem(item)
+            if c.id == self._current_id:
+                self._list.setCurrentRow(self._list.count() - 1)
+        if archived:
+            sep = QListWidgetItem("— Archived (Deceased) —")
+            sep.setFlags(Qt.ItemFlag.NoItemFlags)
+            sep.setForeground(QBrush(QColor("#888888")))
+            self._list.addItem(sep)
+            for c in archived:
+                item = QListWidgetItem(self._label_for(c))
+                item.setData(Qt.ItemDataRole.UserRole, c.id)
+                item.setForeground(QBrush(QColor("#888888")))
+                self._list.addItem(item)
+                if c.id == self._current_id:
+                    self._list.setCurrentRow(self._list.count() - 1)
 
     def _set_sheet(self, char: Character | None) -> None:
         if char is None:

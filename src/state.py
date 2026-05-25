@@ -594,12 +594,26 @@ class StateManager(QObject):
         self.view_mode_changed.emit()
 
     # -- Encounter system ----------------------------------------------
-    def start_encounter(self) -> Encounter:
+    def start_encounter(self, name: str = "") -> Encounter:
         if self.state.active_encounter is None:
-            self.state.active_encounter = Encounter()
-            self.log_event("encounter_started", "New encounter started", category="combat")
+            self.state.active_encounter = Encounter(
+                name=name or f"Encounter {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            self.log_event("encounter_started",
+                           f"Encounter '{self.state.active_encounter.name}' started",
+                           category="combat")
             self.encounter_changed.emit()
         return self.state.active_encounter
+
+    def rename_encounter(self, new_name: str) -> None:
+        if self.state.active_encounter is None:
+            return
+        if new_name == self.state.active_encounter.name:
+            return
+        old = self.state.active_encounter.name
+        self.state.active_encounter.name = new_name
+        self.log_event("encounter_renamed",
+                       f"'{old}' renamed to '{new_name}'", category="combat")
+        self.encounter_changed.emit()
 
     def is_character_in_encounter(self, character_id: str) -> bool:
         enc = self.state.active_encounter
@@ -839,37 +853,65 @@ class StateManager(QObject):
         return cb.get(f"{selection}_atk", 0)
 
     def end_encounter(self) -> str:
-        """Commit encounter changes back to the Global Character List, then clear."""
+        """Commit encounter changes back to the Global Character List, then clear.
+
+        v3.1.1 additions:
+        - SP earned by each surviving character is added to their unallocated_sp.
+        - Non-party survivors get the encounter name appended to encounter_history.
+        - Template instances that survive become new unique characters and
+          their encounter_history is initialized with the encounter name.
+        """
         enc = self.state.active_encounter
         if enc is None:
             return "no active encounter"
+        enc_name = enc.name or "Untitled Encounter"
         survivors = 0
         new_uniques = 0
         for inst in enc.instances:
             if inst.is_in_bin:
                 continue
+            inst_char = inst.character
+            alive = (inst_char.health_current > 0 and not inst_char.is_deceased)
+            # Compute SP earned during this encounter from KP fields
+            cur_level = me.level(inst_char.total_sp())
+            sp = me.sp_earned(inst_char.solo_kp, inst_char.kill_points,
+                              inst_char.participants, cur_level)
             if inst.is_template_instance:
-                # Survivor (HP > 0) becomes a new unique character; dead = discard
-                if inst.character.health_current > 0 and not inst.character.is_deceased:
-                    new_char = copy.deepcopy(inst.character)
+                if alive:
+                    import copy as _copy
+                    new_char = _copy.deepcopy(inst_char)
                     new_char.is_template = False
                     new_char.id = new_id("c")
-                    # Locate the template's original role
+                    new_char.unallocated_sp = (
+                        getattr(new_char, "unallocated_sp", 0) or 0) + sp
+                    new_char.encounter_history = list(
+                        getattr(new_char, "encounter_history", []) or [])
+                    new_char.encounter_history.append(enc_name)
                     src = self.find_character(inst.source_character_id)
                     role = src.role if src else "mob"
                     self._list_for(role).append(new_char)
                     new_uniques += 1
             else:
-                # Unique: copy back to source
                 src = self.find_character(inst.source_character_id)
                 if src is not None:
-                    # Copy every field except id and section_collapsed
-                    for f in dataclasses.fields(Character):
-                        if f.name in ("id", "section_collapsed"):
+                    import dataclasses as _dc
+                    for f in _dc.fields(Character):
+                        if f.name in ("id", "section_collapsed", "unallocated_sp",
+                                       "encounter_history"):
                             continue
-                        setattr(src, f.name, getattr(inst.character, f.name))
+                        setattr(src, f.name, getattr(inst_char, f.name))
+                    # Accumulate unallocated SP
+                    src.unallocated_sp = (
+                        getattr(src, "unallocated_sp", 0) or 0) + sp
+                    # Append to encounter history for non-party survivors
+                    if alive and src.role != "party":
+                        if not hasattr(src, "encounter_history") or \
+                                src.encounter_history is None:
+                            src.encounter_history = []
+                        src.encounter_history.append(enc_name)
                     survivors += 1
-        msg = (f"Encounter ended. {survivors} unique character(s) updated, "
+        msg = (f"Encounter '{enc_name}' ended. "
+               f"{survivors} unique character(s) updated, "
                f"{new_uniques} new unique character(s) from templates.")
         self.log_event("encounter_ended", msg, category="combat")
         self.state.active_encounter = None

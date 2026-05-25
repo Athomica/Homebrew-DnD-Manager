@@ -1,5 +1,47 @@
 # DnD Manager Changelog
 
+## v3.1.1 — Bug-fix and refinement pass
+
+### Critical fixes
+- **Editing fields no longer lags or auto-deselects.** Root cause: a signal
+  cascade was rebuilding/overwriting widgets while the user was still typing.
+  External `character_changed` events now refresh only derived/computed labels,
+  never input widgets. Spin boxes also now use `keyboardTracking=False` so
+  `valueChanged` fires only on commit (Enter or focus loss).
+- **DM view allows editing every value, including current AND max vitals.**
+  The previous build hid the max input in DM mode; that was overzealous.
+- **No more crashes when starting an empty encounter.** "Opponent?" now shows
+  a polite info dialog instead of nothing when there's no encounter or no
+  combatants placed.
+
+### Encounter / character flow
+- **Encounters are nameable while active.** A text field at the top of the
+  Encounter tab edits the name; the default is `Encounter YYYY-MM-DD HH:MM`.
+- **Unallocated SP**: when an encounter ends, each character's earned SP
+  (computed from their KP at that moment) goes into a new `unallocated_sp`
+  pool. A "Spend on Proficiency…" button in the Battle Statistics section
+  applies it manually.
+- **Encounter history**: any non-party character that survives an encounter
+  gets the encounter name appended to their `encounter_history` list. The
+  list is shown in a collapsible "Encounter History" section on Mobs/NPCs
+  in the Global Character List (not on party members or templates).
+- The character picker is now **multi-select** so the DM can add several
+  characters in one go.
+
+### Scaling Modifiers panel
+- The granularity slider is replaced by a numeric `step:` indicator with
+  `-` / `+` buttons either side. The current step size (e.g. `±0.001`) is
+  shown next to it so you know exactly what each click does.
+- Layout is two-line per modifier (label/value on top, controls below) so the
+  dock no longer needs to be very wide.
+- Buttons use ASCII `+` / `-` consistently for cross-font reliability.
+
+### Smaller fixes
+- Roster strip, bin, and pages all show clear empty-state messages.
+- Notes / descriptions commit on focus-out rather than per-keystroke.
+- Animations: the collapse/expand animation uses an explicit content-height
+  end-value instead of the implicit one, so it actually plays.
+
 ## v3.1 — Global Character List, Template/Unique, new Encounters, Developer view
 
 ### UI / UX polish
