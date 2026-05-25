@@ -259,6 +259,13 @@ class Character:
     kill_points: int = 0
     solo_kp: int = 0
     participants: int = 1
+    # v3.7: how much KP this character is worth when killed. Distinct
+    # from `kill_points` (which records what THIS character has earned
+    # by killing others). Set on character creation — templates like
+    # "Goblin" typically have a fixed bounty (e.g. 50). On death the
+    # value flows to the attackers (solo_kp if only one attacker
+    # touched the victim, otherwise kill_points for every attacker).
+    kill_point_value: int = 0
 
     # Equipment
     primary_weapon_id: Optional[str] = None
@@ -488,6 +495,15 @@ class Encounter:
     # conflicts, per user direction.)
     left_action: str = "attack"
     right_action: str = "attack"
+
+    # v3.7: per-encounter attack log. Each time a participant lands actual
+    # damage on another participant during conflict resolution, the
+    # attacker's instance_id is appended to the victim's list. When the
+    # victim dies, this list tells us who gets credit:
+    #   - exactly one unique attacker  →  solo_kp on that attacker
+    #   - more than one unique attacker → kill_points on each of them
+    # Stored as {victim_instance_id: [attacker_instance_id, ...]}.
+    attack_log: dict = field(default_factory=dict)
     left_apply_fall: bool = False
     right_apply_fall: bool = False
     left_pending_item_id: Optional[str] = None   # legacy, unused in v3.4

@@ -1,5 +1,48 @@
 # DnD Manager Changelog
 
+## v3.7 — Kill point value & auto attribution
+
+### New character field: KP value (when killed)
+- Each character has a new fixed-trait field `kill_point_value` — how
+  much KP they're worth to whoever kills them.
+- Lives **next to HP / Stamina / Mana** in the global Character Sheet,
+  not in Battle Statistics (where the previous *recommended KP* widget
+  sat). The **Recommended** value + "Use as KP value" button moved here
+  too, so the recommendation now stamps the bounty, not the accumulator.
+- A `kill_point_value` row also appears at the top of the **Battle
+  Statistics** section of the compact character card (editable in-encounter).
+
+### Per-encounter attack log + automatic KP attribution
+- Each conflict round, when a side lands real damage on the other side,
+  the attacker's instance is appended to a per-encounter
+  `attack_log[victim_id]` list.
+- When a participant's HP hits 0 and they're moved to the deceased pile,
+  their `kill_point_value` is awarded automatically:
+  - **Exactly one unique attacker** → that attacker's `solo_kp` gains
+    the value.
+  - **Two or more unique attackers** → every attacker gets the value in
+    `kill_points`.
+- The conflict resolution log explicitly records who got credit
+  (e.g. `"H2, H3 each earned 50 KP for killing Bigger #2."`).
+
+### Side size → participant count
+- For SP-earned math at `end_encounter`, the participant count for each
+  surviving character is now the **side's full headcount** including the
+  dead (3 left vs 2 right → left gets `participants=3`, right gets 2).
+  A team that lost a member mid-fight is still credited as a 3-person
+  team for SP purposes.
+
+### Battle Statistics hidden in conflict mode
+- The compact card's **Battle Statistics** section (KP / solo_kp /
+  participants / SP earned / unallocated SP) is **hidden while a
+  conflict is being resolved**. It's not actionable mid-conflict — and
+  KP values now auto-update at death anyway. The Sheet tab still shows
+  Passives and Forms during conflict.
+
+Schema unchanged on disk — the new model fields default to 0 / empty.
+
+---
+
 ## v3.6 — Deceased pile
 
 When a character's HP reaches 0 at the end of a conflict, they no longer

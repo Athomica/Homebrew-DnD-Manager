@@ -1333,6 +1333,16 @@ class StateManager(QObject):
         left_dmg = damage_from("left", left.character)
         right_dmg = damage_from("right", right.character)
 
+        # v3.7: record who attacked whom this round so that when a victim
+        # eventually dies, we can route their kill_point_value to the
+        # right place (solo_kp for a single-attacker kill, kill_points
+        # otherwise). Only ACTUAL damaging actions count — landing 0
+        # damage doesn't make you an attacker for KP purposes.
+        if left_dmg > 0:
+            enc.attack_log.setdefault(right.instance_id, []).append(left.instance_id)
+        if right_dmg > 0:
+            enc.attack_log.setdefault(left.instance_id, []).append(right.instance_id)
+
         # --- defenders apply incoming damage according to their own action ---
         def receive(side: str, defender: Character, attacker: Character,
                     incoming: float) -> None:
@@ -1486,11 +1496,13 @@ class StateManager(QObject):
                 continue
             if inst.character.health_current <= 0:
                 inst.character.health_current = 0
-                if not inst.character.is_deceased:
-                    inst.character.is_deceased = True
+                first_death = not inst.character.is_deceased
+                inst.character.is_deceased = True
                 if iid not in deceased:
                     deceased.append(iid)
                 msgs.append(f"{inst.character.name} died.")
+                if first_death:
+                    self._award_kp_for_death(enc, inst, msgs)
             else:
                 survivors.append(iid)
         setattr(enc, part_attr, survivors)
@@ -1498,6 +1510,43 @@ class StateManager(QObject):
         cur = getattr(enc, idx_attr)
         setattr(enc, idx_attr,
                 max(0, min(cur, len(survivors) - 1)) if survivors else 0)
+
+    def _award_kp_for_death(self, enc, victim_inst, msgs: list) -> None:
+        """v3.7: distribute the victim's `kill_point_value` among the
+        characters who actually attacked them this encounter.
+
+        - 0 unique attackers (e.g. died to fall damage) → nobody gets KP.
+        - 1 unique attacker → that attacker's `solo_kp` gains the value.
+        - 2+ unique attackers → each gets the value in `kill_points`.
+
+        Looked up by instance_id (so two goblins from the same template
+        with separate kill streaks don't merge)."""
+        value = int(getattr(victim_inst.character, "kill_point_value", 0) or 0)
+        if value <= 0:
+            return
+        attacker_ids = enc.attack_log.get(victim_inst.instance_id, [])
+        unique_ids = list(dict.fromkeys(attacker_ids))  # preserves order, dedupes
+        if not unique_ids:
+            return
+        attackers = []
+        for aid in unique_ids:
+            ai = next((i for i in enc.instances if i.instance_id == aid), None)
+            if ai is not None and ai.character is not None:
+                attackers.append(ai)
+        if not attackers:
+            return
+        if len(attackers) == 1:
+            a = attackers[0]
+            a.character.solo_kp = int(getattr(a.character, "solo_kp", 0) or 0) + value
+            msgs.append(f"{a.character.name} earned {value} solo KP "
+                        f"for killing {victim_inst.character.name}.")
+        else:
+            for a in attackers:
+                a.character.kill_points = int(
+                    getattr(a.character, "kill_points", 0) or 0) + value
+            names = ", ".join(a.character.name for a in attackers)
+            msgs.append(f"{names} each earned {value} KP "
+                        f"for killing {victim_inst.character.name}.")
 
     def _atk_value_for_selection(self, character: Character, selection: str) -> float:
         cb = me.derive_combat_view(character, self.state.weapons,
@@ -1521,11 +1570,16 @@ class StateManager(QObject):
         survivors = 0
         new_uniques = 0
         # v3.2: side-aware participant counts override the per-character field.
+        # v3.7: deceased participants still count toward the side's
+        # headcount — a 3-person team that lost one mid-fight is still a
+        # 3-participant team for SP-earned purposes.
         side_for: dict[str, int] = {}
-        for iid in enc.left_participant_ids:
-            side_for[iid] = max(1, len(enc.left_participant_ids))
-        for iid in enc.right_participant_ids:
-            side_for[iid] = max(1, len(enc.right_participant_ids))
+        left_n = max(1, len(enc.left_participant_ids) + len(enc.left_deceased_ids))
+        right_n = max(1, len(enc.right_participant_ids) + len(enc.right_deceased_ids))
+        for iid in enc.left_participant_ids + enc.left_deceased_ids:
+            side_for[iid] = left_n
+        for iid in enc.right_participant_ids + enc.right_deceased_ids:
+            side_for[iid] = right_n
         for inst in enc.instances:
             if inst.is_in_bin:
                 continue

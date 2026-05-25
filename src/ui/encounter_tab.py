@@ -74,11 +74,16 @@ class CompactCharacterCard(QFrame):
 
     def __init__(self, state: StateManager, instance: EncounterInstance,
                  side: str, current_idx: int, total: int,
+                 in_conflict: bool = False,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._state = state
         self._instance = instance
         self._side = side
+        # v3.7: battle statistics aren't needed while a conflict is
+        # being resolved — KP/SP accumulators only matter between
+        # conflicts. Pass-through to the tab assembler below.
+        self._in_conflict = in_conflict
         self.setObjectName("EncounterCardRoot")
         self._normal_style = ""
         self._conflict_style = (
@@ -167,7 +172,10 @@ class CompactCharacterCard(QFrame):
         combat = self._build_combat_tab()
         equipment = self._build_equipment_tab()
         inventory = self._build_inventory_tab()
-        stats = self._build_stats_tab()
+        # v3.7: Stats section (battle statistics — KP/solo_kp/SP earned)
+        # is suppressed during conflict mode. It's not actionable while
+        # actions are being picked, just visual noise.
+        stats = None if self._in_conflict else self._build_stats_tab()
         passives = self._build_passives_tab()
         forms = (self._build_forms_tab()
                   if (instance.character.is_shapeshifter
@@ -175,7 +183,10 @@ class CompactCharacterCard(QFrame):
 
         gear = self._make_grouped_tab(
             [("⚔  Equipment", equipment), ("🎒  Inventory", inventory)])
-        sheet_sections = [("📊  Stats", stats), ("✨  Passives", passives)]
+        sheet_sections = []
+        if stats is not None:
+            sheet_sections.append(("📊  Battle Statistics", stats))
+        sheet_sections.append(("✨  Passives", passives))
         if forms is not None:
             sheet_sections.append(("🐺  Forms", forms))
         sheet = self._make_grouped_tab(sheet_sections)
@@ -603,11 +614,19 @@ class CompactCharacterCard(QFrame):
         self._part_in.setRange(1, 100)
         self._part_in.valueChanged.connect(
             lambda val: self._set_field("participants", val))
+        # v3.7: KP value (what this character is worth when killed). The
+        # bounty is auto-distributed at death; editable here for GMs.
+        self._kp_value_in = NoWheelSpinBox(); self._kp_value_in.setKeyboardTracking(False)
+        self._kp_value_in.setRange(0, 999999)
+        self._kp_value_in.valueChanged.connect(
+            lambda val: self._set_field("kill_point_value", val))
+        f.addRow("KP value (when killed):", self._kp_value_in)
         f.addRow("Total Kill Points:", self._kp_in)
         f.addRow("Solo KP:", self._solo_kp_in)
+        # v3.7: participants is now derived from side size — the editable
+        # field stays as a fallback for solo/non-encounter SP math but is
+        # de-emphasized here. (See state.end_encounter for the override.)
         f.addRow("Participants:", self._part_in)
-        self._rec_kp_lbl = QLabel("0"); self._rec_kp_lbl.setProperty("role", "big")
-        f.addRow("Recommended KP:", self._rec_kp_lbl)
         self._sp_earned_lbl = QLabel("0")
         f.addRow("SP earned (this combat):", self._sp_earned_lbl)
         self._unalloc_lbl = QLabel("0")
@@ -807,15 +826,17 @@ class CompactCharacterCard(QFrame):
             self._using_primary_chk.blockSignals(False)
 
     def _refresh_stats(self) -> None:
+        # v3.7: stats section is skipped during conflict — no widgets to refresh.
+        if self._in_conflict or not hasattr(self, "_kp_in"):
+            return
         c = self._instance.character
         for spin, val in ((self._kp_in, c.kill_points),
                           (self._solo_kp_in, c.solo_kp),
-                          (self._part_in, c.participants)):
+                          (self._part_in, c.participants),
+                          (self._kp_value_in,
+                            int(getattr(c, "kill_point_value", 0) or 0))):
             if spin.value() != val:
                 spin.blockSignals(True); spin.setValue(val); spin.blockSignals(False)
-        rec = me.recommended_kp(c, self._state.state.weapons,
-                                 self._state.state.armors, self._state.state.items)
-        self._rec_kp_lbl.setText(str(rec["total"]))
         lvl = me.level(c.total_sp())
         sp_earn = me.sp_earned(c.solo_kp, c.kill_points, c.participants, lvl)
         self._sp_earned_lbl.setText(f"{sp_earn:.1f}")
@@ -1902,7 +1923,8 @@ class EncounterTab(QWidget):
         if l_inst is not None and l_inst.character is not None:
             self._left_empty.setVisible(False)
             card = CompactCharacterCard(self._state, l_inst, "left",
-                                          enc.left_active_idx, len(enc.left_participant_ids))
+                                          enc.left_active_idx, len(enc.left_participant_ids),
+                                          in_conflict=enc.in_conflict_mode)
             card.arrows_clicked.connect(lambda d: self._state.cycle_active("left", d))
             card.set_conflict_border(enc.in_conflict_mode)
             self._left_inner.addWidget(card, 1)
@@ -1921,7 +1943,8 @@ class EncounterTab(QWidget):
         if r_inst is not None and r_inst.character is not None:
             self._right_empty.setVisible(False)
             card = CompactCharacterCard(self._state, r_inst, "right",
-                                          enc.right_active_idx, len(enc.right_participant_ids))
+                                          enc.right_active_idx, len(enc.right_participant_ids),
+                                          in_conflict=enc.in_conflict_mode)
             card.arrows_clicked.connect(lambda d: self._state.cycle_active("right", d))
             card.set_conflict_border(enc.in_conflict_mode)
             self._right_inner.addWidget(card, 1)

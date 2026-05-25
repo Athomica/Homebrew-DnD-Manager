@@ -342,6 +342,43 @@ class CharacterSheet(QWidget):
         self._mana_bar.max_input.valueChanged.connect(
             lambda v: self._on_max_change("mana_max", v))
 
+        # v3.7: KP value (what this character is worth when killed).
+        # Lives next to HP/Stamina/Mana because it's a fixed character
+        # trait — not a per-encounter accumulator. The recommended-KP
+        # widget sits inline so a GM can stamp the suggested bounty.
+        # Note: _kp_rec_label / _kp_rec_breakdown are created here
+        # (vitals is built before battle_stats in the section list).
+        self._kp_rec_label = QLabel("0"); self._kp_rec_label.setProperty("role", "big")
+        self._kp_rec_breakdown = QLabel("")
+        self._kp_rec_breakdown.setProperty("role", "dim")
+        self._kp_rec_breakdown.setWordWrap(True)
+        kp_row = QHBoxLayout(); kp_row.setSpacing(8)
+        kp_lbl = QLabel("KP value (when killed):")
+        kp_row.addWidget(kp_lbl)
+        self._kp_value_in = _no_track_spin(NoWheelSpinBox())
+        self._kp_value_in.setRange(0, 999999)
+        self._kp_value_in.valueChanged.connect(
+            lambda v: self._set_field("kill_point_value", v))
+        kp_row.addWidget(self._kp_value_in)
+        kp_row.addSpacing(16)
+        kp_row.addWidget(QLabel("Recommended:"))
+        kp_row.addWidget(self._kp_rec_label)
+        self._kp_rec_apply = QPushButton("Use as KP value")
+        self._kp_rec_apply.setToolTip(
+            "Copy the recommended value into 'KP value (when killed)'.")
+        self._kp_rec_apply.clicked.connect(self._on_apply_recommended_kp)
+        kp_row.addWidget(self._kp_rec_apply)
+        kp_row.addStretch(1)
+        kp_wrap = QWidget(); kp_wrap.setLayout(kp_row)
+        outer.addWidget(kp_wrap)
+        # Dev-view breakdown (kept around for the existing dev toggle).
+        self._kp_rec_breakdown_row_label = QLabel("KP rec. breakdown:")
+        breakdown_row = QHBoxLayout(); breakdown_row.setSpacing(8)
+        breakdown_row.addWidget(self._kp_rec_breakdown_row_label)
+        breakdown_row.addWidget(self._kp_rec_breakdown, 1)
+        breakdown_w = QWidget(); breakdown_w.setLayout(breakdown_row)
+        outer.addWidget(breakdown_w)
+
         return wrap
 
     def _on_max_change(self, attr: str, value: int) -> None:
@@ -371,16 +408,8 @@ class CharacterSheet(QWidget):
         self._vital_calc_label = QLabel("")
         self._vital_calc_label.setProperty("role", "dim")
         self._vital_calc_label.setWordWrap(True)
-        # v3.2: recommended KP bounty + breakdown in Dev view
-        self._kp_rec_label = QLabel("0")
-        self._kp_rec_label.setProperty("role", "big")
-        self._kp_rec_apply = QPushButton("Use as Total KP")
-        self._kp_rec_apply.setToolTip(
-            "Copy the recommended value into the 'Total Kill Points' field above.")
-        self._kp_rec_apply.clicked.connect(self._on_apply_recommended_kp)
-        self._kp_rec_breakdown = QLabel("")
-        self._kp_rec_breakdown.setProperty("role", "dim")
-        self._kp_rec_breakdown.setWordWrap(True)
+        # v3.7: recommended-KP labels are built in _build_vitals_section
+        # (and refresh updates them there). Nothing to construct here.
 
         # v3.1.1: Unallocated SP pool with manual spend buttons
         unalloc_row = QHBoxLayout()
@@ -399,34 +428,29 @@ class CharacterSheet(QWidget):
         self._participants_in.valueChanged.connect(
             lambda v: self._set_field("participants", v))
 
-        # Total KP row with the recommendation next to it
-        kp_row = QHBoxLayout()
-        kp_row.setSpacing(10)
-        kp_row.addWidget(self._kp_in)
-        kp_row.addSpacing(20)
-        kp_row.addWidget(QLabel("Recommended:"))
-        kp_row.addWidget(self._kp_rec_label)
-        kp_row.addWidget(self._kp_rec_apply)
-        kp_row.addStretch(1)
-        kp_row_w = QWidget(); kp_row_w.setLayout(kp_row)
-        form.addRow("Total Kill Points:", kp_row_w)
+        # v3.7: kill_points and solo_kp are now read-only-ish accumulators
+        # (resolve_conflict awards them automatically when something dies).
+        # Editable for GMs who want to fix them up, but no "Recommended"
+        # widget here — that lives next to kill_point_value in the vitals
+        # section where it conceptually belongs.
+        form.addRow("Total Kill Points:", self._kp_in)
         form.addRow("Solo KP:", self._solo_kp_in)
         form.addRow("Participants:", self._participants_in)
         form.addRow("SP Earned (this combat):", self._sp_earned_label)
         self._coord_row_label = QLabel("Coordination:")
         form.addRow(self._coord_row_label, self._coord_label)
-        # Dev-view-only breakdown label
-        self._kp_rec_breakdown_row_label = QLabel("KP rec. breakdown:")
-        form.addRow(self._kp_rec_breakdown_row_label, self._kp_rec_breakdown)
         form.addRow("Unallocated SP:", unalloc_wrap)
         form.addRow("", self._vital_calc_label)
         return wrap
 
     def _on_apply_recommended_kp(self) -> None:
+        # v3.7: writes to kill_point_value (bounty when killed), NOT to
+        # kill_points (which is an in-encounter accumulator).
         rec = me.recommended_kp(self._char, self._state.state.weapons,
                                 self._state.state.armors, self._state.state.items)
-        self._state.set_character_field(self._char, "kill_points", int(rec["total"]))
-        self._kp_in.setValue(int(rec["total"]))
+        self._state.set_character_field(
+            self._char, "kill_point_value", int(rec["total"]))
+        self._kp_value_in.setValue(int(rec["total"]))
 
     def _on_spend_unallocated_sp(self) -> None:
         from PyQt6.QtWidgets import QInputDialog
@@ -1194,6 +1218,9 @@ class CharacterSheet(QWidget):
             self._kp_in.setValue(self._char.kill_points)
             self._solo_kp_in.setValue(self._char.solo_kp)
             self._participants_in.setValue(self._char.participants)
+            # v3.7: kill_point_value (bounty when killed)
+            self._kp_value_in.setValue(
+                int(getattr(self._char, "kill_point_value", 0) or 0))
 
             # Dice
             self._dice_in.setValue(self._char.dice)
