@@ -1,5 +1,24 @@
 # DnD Manager Changelog
 
+## v3.7.1 — UX cleanup
+
+- **No more "+ Start Encounter" placeholder** in the middle column when
+  there's no active encounter. The "+ New encounter" button in the tab
+  strip header has always been there; the prominent in-canvas
+  call-to-action was redundant and forced the main window into an
+  awkward state every time the user ended an encounter.
+- **Battle Statistics are now look-only** — Total Kill Points, Solo KP
+  and Participants are plain labels in both the compact card and the
+  global Character Sheet. Conflict resolution attributes KP
+  automatically and end_encounter overrides `participants` from side
+  size anyway, so there was nothing left to hand-edit. The only
+  editable field on the stats panel is **KP value (when killed)**,
+  which is a character trait, not a statistic.
+- **Participants display shows the actual side headcount** (`alive +
+  deceased`) in the compact card, matching what end_encounter uses for
+  SP credit. A team that lost a member mid-fight is still credited as
+  the full team for SP.
+
 ## v3.7 — Kill point value & auto attribution
 
 ### New character field: KP value (when killed)

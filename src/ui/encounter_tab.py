@@ -602,31 +602,24 @@ class CompactCharacterCard(QFrame):
         tab = QWidget()
         f = QFormLayout(tab)
         f.setContentsMargins(6, 8, 6, 6)
-        self._kp_in = NoWheelSpinBox(); self._kp_in.setKeyboardTracking(False)
-        self._kp_in.setRange(0, 999999)
-        self._kp_in.valueChanged.connect(
-            lambda val: self._set_field("kill_points", val))
-        self._solo_kp_in = NoWheelSpinBox(); self._solo_kp_in.setKeyboardTracking(False)
-        self._solo_kp_in.setRange(0, 999999)
-        self._solo_kp_in.valueChanged.connect(
-            lambda val: self._set_field("solo_kp", val))
-        self._part_in = NoWheelSpinBox(); self._part_in.setKeyboardTracking(False)
-        self._part_in.setRange(1, 100)
-        self._part_in.valueChanged.connect(
-            lambda val: self._set_field("participants", val))
-        # v3.7: KP value (what this character is worth when killed). The
-        # bounty is auto-distributed at death; editable here for GMs.
+        # v3.7.1: battle statistics are display-only. KP totals are
+        # incremented automatically by conflict resolution; participants
+        # is derived from the character's side size; SP earned is
+        # computed; the user has no reason to hand-edit any of them.
+        # The only thing on this tab that the GM still tweaks is the
+        # kill_point_value (the bounty when this character is killed).
         self._kp_value_in = NoWheelSpinBox(); self._kp_value_in.setKeyboardTracking(False)
         self._kp_value_in.setRange(0, 999999)
         self._kp_value_in.valueChanged.connect(
             lambda val: self._set_field("kill_point_value", val))
         f.addRow("KP value (when killed):", self._kp_value_in)
-        f.addRow("Total Kill Points:", self._kp_in)
-        f.addRow("Solo KP:", self._solo_kp_in)
-        # v3.7: participants is now derived from side size — the editable
-        # field stays as a fallback for solo/non-encounter SP math but is
-        # de-emphasized here. (See state.end_encounter for the override.)
-        f.addRow("Participants:", self._part_in)
+
+        self._kp_lbl = QLabel("0"); self._kp_lbl.setProperty("role", "big")
+        self._solo_kp_lbl = QLabel("0"); self._solo_kp_lbl.setProperty("role", "big")
+        self._part_lbl = QLabel("1"); self._part_lbl.setProperty("role", "big")
+        f.addRow("Total Kill Points:", self._kp_lbl)
+        f.addRow("Solo KP:", self._solo_kp_lbl)
+        f.addRow("Participants (this side):", self._part_lbl)
         self._sp_earned_lbl = QLabel("0")
         f.addRow("SP earned (this combat):", self._sp_earned_lbl)
         self._unalloc_lbl = QLabel("0")
@@ -827,20 +820,35 @@ class CompactCharacterCard(QFrame):
 
     def _refresh_stats(self) -> None:
         # v3.7: stats section is skipped during conflict — no widgets to refresh.
-        if self._in_conflict or not hasattr(self, "_kp_in"):
+        if self._in_conflict or not hasattr(self, "_kp_value_in"):
             return
         c = self._instance.character
-        for spin, val in ((self._kp_in, c.kill_points),
-                          (self._solo_kp_in, c.solo_kp),
-                          (self._part_in, c.participants),
-                          (self._kp_value_in,
-                            int(getattr(c, "kill_point_value", 0) or 0))):
-            if spin.value() != val:
-                spin.blockSignals(True); spin.setValue(val); spin.blockSignals(False)
+        # v3.7.1: KP totals + participants are display-only now.
+        self._kp_lbl.setText(str(int(c.kill_points)))
+        self._solo_kp_lbl.setText(str(int(c.solo_kp)))
+        # Participants = this character's side headcount (alive + dead),
+        # matching the value end_encounter uses when crediting SP.
+        side_n = self._side_participant_count()
+        self._part_lbl.setText(str(side_n))
+        if self._kp_value_in.value() != int(getattr(c, "kill_point_value", 0) or 0):
+            self._kp_value_in.blockSignals(True)
+            self._kp_value_in.setValue(int(getattr(c, "kill_point_value", 0) or 0))
+            self._kp_value_in.blockSignals(False)
         lvl = me.level(c.total_sp())
-        sp_earn = me.sp_earned(c.solo_kp, c.kill_points, c.participants, lvl)
+        sp_earn = me.sp_earned(c.solo_kp, c.kill_points, side_n, lvl)
         self._sp_earned_lbl.setText(f"{sp_earn:.1f}")
         self._unalloc_lbl.setText(f"{c.unallocated_sp:.1f}")
+
+    def _side_participant_count(self) -> int:
+        """v3.7.1: how many participants are on this card's side, counting
+        the dead. Used as the `participants` value for SP-earned math so
+        the in-encounter display matches what end_encounter commits."""
+        enc = self._state.state.active_encounter
+        if enc is None:
+            return max(1, int(self._instance.character.participants or 1))
+        if self._side == "left":
+            return max(1, len(enc.left_participant_ids) + len(enc.left_deceased_ids))
+        return max(1, len(enc.right_participant_ids) + len(enc.right_deceased_ids))
 
     def _refresh_passives(self) -> None:
         c = self._instance.character
@@ -1879,17 +1887,19 @@ class EncounterTab(QWidget):
         self._clear_layout(self._middle_layout, keep_widgets=(self._conflict_btn,))
         self._clear_layout(self._bin_layout, keep_widgets=(self._bin_empty,))
         if enc is None:
-            self._left_empty.setVisible(False)
-            self._right_empty.setVisible(False)
+            # v3.7.1: no prominent empty-state placeholder anymore — it
+            # was forcing the main window into an awkward "+ Start
+            # Encounter" prompt every time the user ended an encounter.
+            # The "+ New encounter" button in the tab strip header is
+            # always visible, so there's nothing to gain by repeating
+            # the call to action in the middle. Just clear the canvas.
+            self._left_empty.setVisible(True)
+            self._left_empty.setText("\n(no active encounter)\n")
+            self._right_empty.setVisible(True)
+            self._right_empty.setText("\n(no active encounter)\n")
             self._bin_empty.setVisible(True)
             self._conflict_btn.setEnabled(False)
             self._conflict_btn.setText("Enter Conflict"); self._conflict_btn.setVisible(False)
-            # v3.4.6: empty-state placeholder fills the middle column with a
-            # call-to-action ("+ Start Encounter").
-            # Reparent the placeholder fresh each time so it doesn't get
-            # deleted by _clear_layout.
-            placeholder = self._build_empty_state()
-            self._middle_layout.addWidget(placeholder)
             self._update_bin_header()
             return
         binned = [i for i in enc.instances if i.is_in_bin]

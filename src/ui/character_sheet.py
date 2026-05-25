@@ -396,12 +396,13 @@ class CharacterSheet(QWidget):
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
 
-        self._kp_in = _no_track_spin(NoWheelSpinBox())
-        self._kp_in.setRange(0, 999999)
-        self._solo_kp_in = _no_track_spin(NoWheelSpinBox())
-        self._solo_kp_in.setRange(0, 999999)
-        self._participants_in = _no_track_spin(NoWheelSpinBox())
-        self._participants_in.setRange(1, 100)
+        # v3.7.1: KP totals, solo KP and participants are display-only
+        # — kill_points / solo_kp are awarded automatically by conflict
+        # resolution, and participants is derived from the side
+        # headcount at end_encounter. Nothing for the GM to hand-edit.
+        self._kp_lbl = QLabel("0"); self._kp_lbl.setProperty("role", "big")
+        self._solo_kp_lbl = QLabel("0"); self._solo_kp_lbl.setProperty("role", "big")
+        self._participants_lbl = QLabel("1"); self._participants_lbl.setProperty("role", "big")
         self._sp_earned_label = QLabel("0.0")
         self._sp_earned_label.setProperty("role", "big")
         self._coord_label = QLabel("0.0")
@@ -423,19 +424,16 @@ class CharacterSheet(QWidget):
         unalloc_row.addStretch(1)
         unalloc_wrap = QWidget(); unalloc_wrap.setLayout(unalloc_row)
 
-        self._kp_in.valueChanged.connect(lambda v: self._set_field("kill_points", v))
-        self._solo_kp_in.valueChanged.connect(lambda v: self._set_field("solo_kp", v))
-        self._participants_in.valueChanged.connect(
-            lambda v: self._set_field("participants", v))
+        # v3.7.1: no value-change handlers — these labels are read-only.
 
         # v3.7: kill_points and solo_kp are now read-only-ish accumulators
         # (resolve_conflict awards them automatically when something dies).
         # Editable for GMs who want to fix them up, but no "Recommended"
         # widget here — that lives next to kill_point_value in the vitals
         # section where it conceptually belongs.
-        form.addRow("Total Kill Points:", self._kp_in)
-        form.addRow("Solo KP:", self._solo_kp_in)
-        form.addRow("Participants:", self._participants_in)
+        form.addRow("Total Kill Points:", self._kp_lbl)
+        form.addRow("Solo KP:", self._solo_kp_lbl)
+        form.addRow("Participants:", self._participants_lbl)
         form.addRow("SP Earned (this combat):", self._sp_earned_label)
         self._coord_row_label = QLabel("Coordination:")
         form.addRow(self._coord_row_label, self._coord_label)
@@ -1214,11 +1212,11 @@ class CharacterSheet(QWidget):
                     bar.current_input.setButtonSymbols(
                         QAbstractSpinBox.ButtonSymbols.UpDownArrows)
 
-            # KP
-            self._kp_in.setValue(self._char.kill_points)
-            self._solo_kp_in.setValue(self._char.solo_kp)
-            self._participants_in.setValue(self._char.participants)
-            # v3.7: kill_point_value (bounty when killed)
+            # KP (display-only — auto-attributed by conflict resolution)
+            self._kp_lbl.setText(str(int(self._char.kill_points)))
+            self._solo_kp_lbl.setText(str(int(self._char.solo_kp)))
+            self._participants_lbl.setText(str(int(self._char.participants)))
+            # v3.7: kill_point_value (bounty when killed) is still editable
             self._kp_value_in.setValue(
                 int(getattr(self._char, "kill_point_value", 0) or 0))
 
