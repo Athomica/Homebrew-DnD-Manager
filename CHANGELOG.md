@@ -1,5 +1,25 @@
 # DnD Manager Changelog
 
+## v3.7.2 — KP is per-encounter only; global sheet is just progression
+
+- The **Battle Statistics section is removed from the global Character
+  Sheet**. It's replaced with a tiny **Progression** section that
+  contains only "Unallocated SP" + the Spend on Proficiency button.
+- **KP no longer carries between encounters.** `kill_points`,
+  `solo_kp` and `participants` reset to 0/0/1 on encounter entry
+  (`add_character_to_encounter`) AND on encounter exit (`end_encounter`
+  skips them in the field-copy and force-zeros them on the source).
+  Template-turned-unique survivors also start clean.
+- The encounter still works as a gathering place for KP — during play
+  the compact card shows the running totals — but those totals never
+  pollute the global list.
+- **Unallocated SP is displayed as a whole number** (no decimals)
+  everywhere it's shown.
+
+Schema unchanged on disk. Existing saves get a one-time wash: as soon
+as you end any encounter, residual KP fields on touched characters get
+zeroed.
+
 ## v3.7.1 — UX cleanup
 
 - **No more "+ Start Encounter" placeholder** in the middle column when

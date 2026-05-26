@@ -106,7 +106,7 @@ class CharacterSheet(QWidget):
             outer.addWidget(sect)
 
         add_section("Vitals", "Vitals", self._build_vitals_section)
-        add_section("Battle Statistics", "Battle Statistics", self._build_battle_stats_section)
+        add_section("Progression", "Progression", self._build_progression_section)
         add_section("Level / Dice", "Level / Dice", self._build_level_dice_section)
         add_section("Proficiencies", "Proficiencies", self._build_proficiencies_section)
         add_section("Combat Resolution", "Combat Resolution",
@@ -387,35 +387,34 @@ class CharacterSheet(QWidget):
         self._set_field(attr, value)
 
     # ------------------------------------------------------------------
-    # Battle Statistics (KP + SP calculator + Unallocated SP)
+    # Progression (Unallocated SP only — battle stats are per-encounter)
     # ------------------------------------------------------------------
-    def _build_battle_stats_section(self) -> QWidget:
+    def _build_progression_section(self) -> QWidget:
+        """v3.7.2: the global character no longer carries battle
+        statistics. KP totals, solo KP and participants live inside the
+        active encounter only — they reset to zero on encounter entry
+        and never get committed back to the source character. The only
+        thing that survives the encounter is the SP credit, which
+        accumulates here as Unallocated SP.
+
+        Several attributes still need to exist for the rest of the
+        sheet's refresh path to work (coordination + vital-calc labels
+        consumed by other sections), but they aren't displayed."""
         wrap = QWidget()
         form = QFormLayout(wrap)
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
 
-        # v3.7.1: KP totals, solo KP and participants are display-only
-        # — kill_points / solo_kp are awarded automatically by conflict
-        # resolution, and participants is derived from the side
-        # headcount at end_encounter. Nothing for the GM to hand-edit.
-        self._kp_lbl = QLabel("0"); self._kp_lbl.setProperty("role", "big")
-        self._solo_kp_lbl = QLabel("0"); self._solo_kp_lbl.setProperty("role", "big")
-        self._participants_lbl = QLabel("1"); self._participants_lbl.setProperty("role", "big")
-        self._sp_earned_label = QLabel("0.0")
-        self._sp_earned_label.setProperty("role", "big")
+        # Hidden helpers that the rest of refresh() still pokes at.
         self._coord_label = QLabel("0.0")
+        self._coord_row_label = QLabel("Coordination:")
         self._vital_calc_label = QLabel("")
-        self._vital_calc_label.setProperty("role", "dim")
-        self._vital_calc_label.setWordWrap(True)
-        # v3.7: recommended-KP labels are built in _build_vitals_section
-        # (and refresh updates them there). Nothing to construct here.
+        self._sp_earned_label = QLabel("0")  # unused; written but not shown
 
-        # v3.1.1: Unallocated SP pool with manual spend buttons
         unalloc_row = QHBoxLayout()
         unalloc_row.setSpacing(10)
-        self._unalloc_label = QLabel("0.0")
+        self._unalloc_label = QLabel("0")
         self._unalloc_label.setProperty("role", "big")
         unalloc_row.addWidget(self._unalloc_label)
         spend_btn = QPushButton("Spend on Proficiency…")
@@ -423,22 +422,7 @@ class CharacterSheet(QWidget):
         unalloc_row.addWidget(spend_btn)
         unalloc_row.addStretch(1)
         unalloc_wrap = QWidget(); unalloc_wrap.setLayout(unalloc_row)
-
-        # v3.7.1: no value-change handlers — these labels are read-only.
-
-        # v3.7: kill_points and solo_kp are now read-only-ish accumulators
-        # (resolve_conflict awards them automatically when something dies).
-        # Editable for GMs who want to fix them up, but no "Recommended"
-        # widget here — that lives next to kill_point_value in the vitals
-        # section where it conceptually belongs.
-        form.addRow("Total Kill Points:", self._kp_lbl)
-        form.addRow("Solo KP:", self._solo_kp_lbl)
-        form.addRow("Participants:", self._participants_lbl)
-        form.addRow("SP Earned (this combat):", self._sp_earned_label)
-        self._coord_row_label = QLabel("Coordination:")
-        form.addRow(self._coord_row_label, self._coord_label)
         form.addRow("Unallocated SP:", unalloc_wrap)
-        form.addRow("", self._vital_calc_label)
         return wrap
 
     def _on_apply_recommended_kp(self) -> None:
@@ -455,14 +439,14 @@ class CharacterSheet(QWidget):
         prof_names = [PROF_LABELS[p] for p in PROFICIENCIES]
         choice, ok = QInputDialog.getItem(
             self, "Spend Unallocated SP",
-            f"Available: {self._char.unallocated_sp:.1f} SP. Apply to which proficiency?",
+            f"Available: {int(self._char.unallocated_sp)} SP. Apply to which proficiency?",
             prof_names, 0, False,
         )
         if not ok:
             return
         amount, ok = QInputDialog.getDouble(
             self, "Spend Unallocated SP",
-            f"How much to apply to {choice}? (Max: {self._char.unallocated_sp:.1f})",
+            f"How much to apply to {choice}? (Max: {int(self._char.unallocated_sp)})",
             self._char.unallocated_sp, 0.0, self._char.unallocated_sp, 1,
         )
         if not ok or amount <= 0:
@@ -1212,11 +1196,9 @@ class CharacterSheet(QWidget):
                     bar.current_input.setButtonSymbols(
                         QAbstractSpinBox.ButtonSymbols.UpDownArrows)
 
-            # KP (display-only — auto-attributed by conflict resolution)
-            self._kp_lbl.setText(str(int(self._char.kill_points)))
-            self._solo_kp_lbl.setText(str(int(self._char.solo_kp)))
-            self._participants_lbl.setText(str(int(self._char.participants)))
-            # v3.7: kill_point_value (bounty when killed) is still editable
+            # v3.7.2: KP totals no longer live on the global character,
+            # so there's nothing to push to the (deleted) labels here.
+            # kill_point_value (bounty when killed) is still editable.
             self._kp_value_in.setValue(
                 int(getattr(self._char, "kill_point_value", 0) or 0))
 
@@ -1278,7 +1260,8 @@ class CharacterSheet(QWidget):
                                self._char.participants, lvl)
         self._coord_label.setText(f"{coord:.1f}")
         self._sp_earned_label.setText(f"{sp_earn:.1f}")
-        self._unalloc_label.setText(f"{self._char.unallocated_sp:.1f}")
+        # v3.7.2: round to whole SP (the user's request — no decimals).
+        self._unalloc_label.setText(str(int(self._char.unallocated_sp)))
 
         # KP recommendation (always computed; breakdown only shown in dev view)
         rec = me.recommended_kp(self._char, self._state.state.weapons,

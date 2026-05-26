@@ -794,6 +794,15 @@ class StateManager(QObject):
         # Copy the character; for templates, reset current vitals to max
         cclone = copy.deepcopy(source)
         cclone.id = new_id("c")  # encounter copy has its own id
+        # v3.7.2: battle statistics never carry between encounters. The
+        # encounter-instance copy ALWAYS starts at zero — kill_points and
+        # solo_kp accumulate purely for this encounter and get committed
+        # back to nothing (see end_encounter). participants will be
+        # overwritten at end_encounter from the side headcount; reset
+        # here so any in-encounter display starts clean.
+        cclone.kill_points = 0
+        cclone.solo_kp = 0
+        cclone.participants = 1
         if source.is_template:
             # Auto-number: count existing template instances of this template
             n = sum(1 for i in enc.instances if i.source_character_id == source.id) + 1
@@ -1596,6 +1605,12 @@ class StateManager(QObject):
                     new_char = _copy.deepcopy(inst_char)
                     new_char.is_template = False
                     new_char.id = new_id("c")
+                    # v3.7.2: a template-turned-unique starts with no
+                    # battle-statistics accumulators carried over from
+                    # this encounter; they don't survive the transition.
+                    new_char.kill_points = 0
+                    new_char.solo_kp = 0
+                    new_char.participants = 1
                     new_char.unallocated_sp = (
                         getattr(new_char, "unallocated_sp", 0) or 0) + sp
                     new_char.encounter_history = list(
@@ -1609,11 +1624,25 @@ class StateManager(QObject):
                 src = self.find_character(inst.source_character_id)
                 if src is not None:
                     import dataclasses as _dc
+                    # v3.7.2: skip the battle-statistic fields when copying
+                    # back to source — those are per-encounter accumulators
+                    # only. SP earned this encounter is already converted
+                    # into unallocated_sp (below). Without this skip, KP
+                    # totals would pollute the source character and bleed
+                    # into the next encounter.
+                    skip = {"id", "section_collapsed", "unallocated_sp",
+                             "encounter_history",
+                             "kill_points", "solo_kp", "participants"}
                     for f in _dc.fields(Character):
-                        if f.name in ("id", "section_collapsed", "unallocated_sp",
-                                       "encounter_history"):
+                        if f.name in skip:
                             continue
                         setattr(src, f.name, getattr(inst_char, f.name))
+                    # Force-reset the stats on the source too — defensive,
+                    # in case an older save still had non-zero values from
+                    # a pre-v3.7.2 encounter.
+                    src.kill_points = 0
+                    src.solo_kp = 0
+                    src.participants = 1
                     # Accumulate unallocated SP
                     src.unallocated_sp = (
                         getattr(src, "unallocated_sp", 0) or 0) + sp

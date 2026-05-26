@@ -837,7 +837,7 @@ class CompactCharacterCard(QFrame):
         lvl = me.level(c.total_sp())
         sp_earn = me.sp_earned(c.solo_kp, c.kill_points, side_n, lvl)
         self._sp_earned_lbl.setText(f"{sp_earn:.1f}")
-        self._unalloc_lbl.setText(f"{c.unallocated_sp:.1f}")
+        self._unalloc_lbl.setText(str(int(c.unallocated_sp)))
 
     def _side_participant_count(self) -> int:
         """v3.7.1: how many participants are on this card's side, counting
