@@ -1,5 +1,32 @@
 # DnD Manager Changelog
 
+## v3.8.1 — Forms count toward effective values
+
+`effective_vitals` and `derive_proficiency_view` were using the
+form-multiplied value as their baseline, so a Werewolf in Wolf form
+(say `martial_mult = 2.0`) would show `raw_sp = effective_sp = 100`
+and a `sp_delta = 0` — the form's own contribution was invisible in
+the Effective column.
+
+v3.8.1 changes "raw" to mean *truly stored* (no form mult, no
+passives), so `Effective SP` is now `raw_sp + form_mult_delta +
+passive_delta` and the green/red coloring covers both shapeshift
+forms and passives.
+
+Verified:
+```
+Werewolf in Wolf form (martial ×2, stealth ×0.5, health ×1.5)
+  health_max:  raw=100  effective=150  Δ +50  (green)
+  martial sp:  raw=50   effective=100  Δ +50  (green)
+  stealth sp:  raw=40   effective=20   Δ −20  (red)
+```
+
+Stacking with a passive on top:
+```
++ Bleed passive (-10 health_max)
+  health_max:  raw=100  effective=140  Δ +40  (green, net)
+```
+
 ## v3.8 — Effective values, passives that actually count
 
 ### Effective-value engine

@@ -393,22 +393,32 @@ def effective_vitals(character: Character,
                       armors: Optional[list] = None,
                       spells: Optional[list] = None
                       ) -> dict[str, dict[str, float]]:
-    """v3.8: per-vital effective values + delta from passives.
+    """v3.8: per-vital effective values + delta from form + passives.
 
     Returns a dict keyed by 'health', 'health_max', 'stamina',
     'stamina_max', 'mana', 'mana_max'. Each entry has:
-      raw       — the stored field value (with form_mult for *_max)
-      effective — raw + passive delta
-      delta     — passive delta only (negative = debuff, positive = buff)
+      raw       — the stored field value (NO form mult, NO passives).
+      effective — raw + form-mult + passive delta.
+      delta     — combined form-mult + passive delta (negative = net
+                  debuff, positive = net buff).
+
+    v3.8.1: the form multiplier now contributes to `delta` (so the
+    Effective column visibly reflects shapeshift forms). Previously
+    form_mult was baked into "raw", which made identical-shape buffs
+    invisible to the green/red coloring.
     """
     passives = collect_active_passives(character, weapons, armors, spells)
     out: dict[str, dict[str, float]] = {}
     for vital in ("health", "stamina", "mana"):
-        # *_max picks up form multipliers via Character.effective_vital_max.
-        raw_max = float(character.vital_max_with_form(vital))
-        eff_max, max_delta = effective_value(raw_max, f"{vital}_max", passives)
+        raw_max = float(getattr(character, f"{vital}_max", 0) or 0)
+        form_max = float(character.vital_max_with_form(vital))
+        # form-mult-adjusted max becomes the base passives operate on.
+        eff_max, passive_max_delta = effective_value(
+            form_max, f"{vital}_max", passives)
         out[f"{vital}_max"] = {
-            "raw": raw_max, "effective": eff_max, "delta": max_delta,
+            "raw": raw_max,
+            "effective": eff_max,
+            "delta": eff_max - raw_max,
         }
         raw_cur = float(getattr(character, f"{vital}_current", 0) or 0)
         eff_cur, cur_delta = effective_value(raw_cur, vital, passives)
@@ -428,14 +438,22 @@ def derive_proficiency_view(character: Character,
     dice = character.dice
     passives = collect_active_passives(character, weapons, armors, spells)
     for p in PROFICIENCIES:
-        # Raw = stored proficiency SP * any form multiplier (legacy
-        # "effective_sp"). Effective = raw + passive delta on f"{p}_sp".
-        raw_sp = character.effective_sp(p)
-        eff_sp, sp_delta = effective_value(raw_sp, f"{p}_sp", passives)
+        # v3.8.1: "raw" is the truly stored proficiency SP — no form
+        # multiplier. The effective value layers form mult AND any
+        # passive delta on top, so shapeshift forms visibly contribute
+        # to the Effective SP delta (green when the form buffs the
+        # proficiency, red when it nerfs it).
+        raw_sp = float(character.sp_for(p))
+        sp_with_form = float(character.effective_sp(p))
+        eff_sp, _ = effective_value(sp_with_form, f"{p}_sp", passives)
+        sp_delta = eff_sp - raw_sp
         bonus = dice_bonus(eff_sp, p, dice, lts)
-        raw_throw = throw_result(eff_sp, dice, bonus)
-        # Passive on throw modifies the rolled value directly.
-        eff_throw, throw_delta = effective_value(raw_throw, f"{p}_throw", passives)
+        raw_throw = throw_result(raw_sp, dice,
+                                  dice_bonus(raw_sp, p, dice, lts))
+        eff_throw_pre_passive = throw_result(eff_sp, dice, bonus)
+        eff_throw, _ = effective_value(
+            eff_throw_pre_passive, f"{p}_throw", passives)
+        throw_delta = eff_throw - raw_throw
         out[p] = {
             "effective_sp": eff_sp,
             "raw_sp": raw_sp,
