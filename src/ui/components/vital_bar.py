@@ -60,6 +60,9 @@ class VitalBar(QWidget):
         # away from the raw stored value.
         self._eff_lbl = QLabel("")
         self._eff_lbl.setProperty("role", "dim")
+        # v3.9.2 (B4): per-turn forecast for tick_per_turn passives.
+        self._tick_lbl = QLabel("")
+        self._tick_lbl.setProperty("role", "dim")
 
         bar_row.addWidget(self._bar, 1)
         bar_row.addWidget(QLabel("cur"))
@@ -68,6 +71,7 @@ class VitalBar(QWidget):
             bar_row.addWidget(QLabel("max"))
             bar_row.addWidget(self._max_input)
         bar_row.addWidget(self._eff_lbl)
+        bar_row.addWidget(self._tick_lbl)
 
         outer.addLayout(title_row)
         outer.addLayout(bar_row)
@@ -129,6 +133,27 @@ class VitalBar(QWidget):
         if hasattr(self, "_last_eff"):
             ec, em, cd, md = self._last_eff
             self.set_effective(ec, em, cd, md)
+
+    def set_tick_forecast(self, delta_per_turn: float,
+                            turns_left: int | None = None) -> None:
+        """v3.9.2 (B4): show the next-turn forecast for any
+        tick_per_turn passive that targets this bar's vital. Lives
+        next to the effective label as a small chip:
+            "next turn: -5 (3 turns left)"
+        Negative deltas in red, positive in green. Pass delta=0 to
+        clear the chip.
+        """
+        if abs(delta_per_turn) < 0.5:
+            self._tick_lbl.setText("")
+            return
+        color = "#7fd194" if delta_per_turn > 0 else "#f76b66"
+        sign = "+" if delta_per_turn > 0 else ""
+        text = f"next turn: {sign}{int(round(delta_per_turn))}"
+        if turns_left is not None and turns_left > 0:
+            text += f" ({turns_left}t left)"
+        self._tick_lbl.setText(
+            f"<span style='color:{color}; font-size: 9pt;'>{text}</span>")
+        self._tick_lbl.setTextFormat(Qt.TextFormat.RichText)
 
     def set_effective(self, eff_current: float, eff_max: float,
                        cur_delta: float, max_delta: float) -> None:

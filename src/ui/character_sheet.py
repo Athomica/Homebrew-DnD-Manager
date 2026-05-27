@@ -98,6 +98,19 @@ class CharacterSheet(QWidget):
         # Header strip
         outer.addWidget(self._build_header_strip())
 
+        # v3.9.2 (B1): quick-jump bar — clickable section chips at the
+        # top of the sheet. Clicking a chip scrolls that section into
+        # view AND expands it if collapsed. A truly-sticky sidebar
+        # would need restructuring the parent QScrollArea; the chip
+        # bar at the top of the sheet gets the same value (one-click
+        # navigation) without that restructure.
+        self._nav_bar = QWidget()
+        self._nav_layout = QHBoxLayout(self._nav_bar)
+        self._nav_layout.setContentsMargins(2, 2, 2, 6)
+        self._nav_layout.setSpacing(4)
+        self._nav_buttons: dict[str, QPushButton] = {}
+        outer.addWidget(self._nav_bar)
+
         self._sections: dict[str, CollapsibleSection] = {}
 
         def add_section(key: str, title: str, builder, default_open: bool = True):
@@ -113,6 +126,17 @@ class CharacterSheet(QWidget):
                 sect.add(content)
             self._sections[key] = sect
             outer.addWidget(sect)
+            # v3.9.2 (B1): nav chip for this section.
+            chip = QPushButton(title)
+            chip.setFlat(True)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setStyleSheet(
+                "QPushButton { padding: 3px 8px; background-color: #2a2a2a; "
+                "color: #aaa; border-radius: 3px; }"
+                "QPushButton:hover { background-color: #3a3a4a; color: #fff; }")
+            chip.clicked.connect(lambda _c, k=key: self._jump_to_section(k))
+            self._nav_buttons[key] = chip
+            self._nav_layout.addWidget(chip)
 
         add_section("Vitals", "Vitals", self._build_vitals_section)
         add_section("Progression", "Progression", self._build_progression_section)
@@ -869,7 +893,13 @@ class CharacterSheet(QWidget):
         own.setStyleSheet(header_style.format(bg="#2a3445", fg="#aacfff"))
         outer.addWidget(own)
         self._passive_editor = PassiveListEditor(source_default="character")
-        self._passive_editor.changed.connect(self._refresh_derived)
+        # v3.9.2: route the editor's `changed` through StateManager so
+        # every other view watching character_changed (compact card,
+        # conflict panel, encounter strip) refreshes in real time.
+        # Previously only this sheet's _refresh_derived ran — the
+        # encounter view stayed stale until the next manual reload.
+        self._passive_editor.changed.connect(
+            lambda: self._state.character_changed.emit(self._char.id))
         outer.addWidget(Resizable(self._passive_editor, initial_height=200))
 
         eq_header = QLabel("Equipment-derived  (edit on the source weapon / armor / spell)")
@@ -1021,7 +1051,17 @@ class CharacterSheet(QWidget):
         self._forms_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Interactive)
         self._forms_table.itemChanged.connect(self._on_form_cell_changed)
-        outer.addWidget(Resizable(self._forms_table, initial_height=240))
+        # v3.9.2 (B2): paint a per-cell bar visualization for the
+        # multiplier columns so users can scan buffs/debuffs visually.
+        # Column 0 (Name) and column 14 (Inv max) get the default
+        # delegate.
+        from ui.components.multiplier_delegate import MultiplierBarDelegate
+        self._mult_delegate = MultiplierBarDelegate(self._forms_table)
+        for col in range(1, 14):
+            self._forms_table.setItemDelegateForColumn(col, self._mult_delegate)
+        # Raise the row height a touch to leave room for the bar.
+        self._forms_table.verticalHeader().setDefaultSectionSize(32)
+        outer.addWidget(Resizable(self._forms_table, initial_height=260))
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
@@ -1292,11 +1332,37 @@ class CharacterSheet(QWidget):
         finally:
             self._suspend = False
 
+    def _jump_to_section(self, key: str) -> None:
+        """v3.9.2 (B1): scroll the parent scroll-area to the named
+        section AND expand it if collapsed. Walks up the parent chain
+        to find the enclosing QScrollArea (set up by the Global
+        Character List tab)."""
+        sect = self._sections.get(key)
+        if sect is None:
+            return
+        # Expand if collapsed.
+        if hasattr(sect, "is_open") and not sect.is_open():
+            sect.set_open(True, animate=False)
+        # Find the enclosing QScrollArea.
+        from PyQt6.QtWidgets import QScrollArea
+        parent = self.parentWidget()
+        scroll = None
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                scroll = parent
+                break
+            parent = parent.parentWidget()
+        if scroll is None:
+            return
+        # ensureWidgetVisible scrolls so `sect` is in view with a margin.
+        scroll.ensureWidgetVisible(sect, 0, 60)
+
     def _push_effective_vitals(self) -> None:
         """v3.9.1: push effective_vitals into each VitalBar. Updates the
         inline ≈N delta label AND the current spinbox's hard cap. Safe
         to call from refresh_derived — it doesn't touch the editable
         current/max spinbox VALUES, only the cap on the current input.
+        v3.9.2 (B4): also push the tick_per_turn forecast.
         """
         ev = me.effective_vitals(
             self._char, self._state.state.weapons,
@@ -1311,6 +1377,27 @@ class CharacterSheet(QWidget):
         self._mana_bar.set_effective(
             ev["mana"]["effective"], ev["mana_max"]["effective"],
             ev["mana"]["delta"], ev["mana_max"]["delta"])
+        # Per-turn forecast (bleed / regen).
+        all_p = me.collect_active_passives(
+            self._char, self._state.state.weapons,
+            self._state.state.armors, self._state.state.spells,
+            self._state.state.items)
+        for vital, bar in (("health", self._hp_bar),
+                            ("stamina", self._stam_bar),
+                            ("mana", self._mana_bar)):
+            delta, ticking = me.per_turn_forecast(self._char, vital, all_p)
+            # Earliest expiring turn-counted passive — use as the
+            # "turns left" hint. Permanent ticks are open-ended.
+            turns_left = None
+            for p in ticking:
+                d = (getattr(p, "duration", "") or "")
+                if d.startswith("turns:"):
+                    try:
+                        n = int(d.split(":", 1)[1])
+                        turns_left = n if turns_left is None else min(turns_left, n)
+                    except ValueError:
+                        pass
+            bar.set_tick_forecast(delta, turns_left)
 
     def _refresh_derived(self) -> None:
         """Recompute and push only DERIVED (read-only label) values.

@@ -452,6 +452,34 @@ def passive_sources(character: Character,
     return out
 
 
+def per_turn_forecast(character: Character, vital: str,
+                       passives: list) -> tuple[float, list]:
+    """v3.9.2 (B4): forecast the per-turn delta on a current vital
+    from any active passives flagged tick_per_turn that target this
+    vital. Fixed passives add their `amount` per turn; percent
+    passives apply against the CURRENT effective value of the vital
+    (so a 5% bleed on a 200/200 character is -10/turn).
+
+    Returns (total_delta_per_turn, ticking_passives) where each
+    entry of the list is the originating Passive.
+    """
+    ticking = []
+    base = float(getattr(character, f"{vital}_current", 0) or 0)
+    delta = 0.0
+    for p in passives:
+        if not getattr(p, "tick_per_turn", False):
+            continue
+        if getattr(p, "affected_value", None) != vital:
+            continue
+        amount = float(getattr(p, "amount", 0.0) or 0.0)
+        if getattr(p, "scope", "fixed") == "percent":
+            delta += base * (amount / 100.0)
+        else:
+            delta += amount
+        ticking.append(p)
+    return delta, ticking
+
+
 def effective_value(base: float, key: str, passives: list) -> tuple[float, float]:
     """v3.8: apply every passive whose `affected_value` matches `key` on
     top of `base`. Returns `(effective, delta)`.
@@ -464,6 +492,10 @@ def effective_value(base: float, key: str, passives: list) -> tuple[float, float
     pct_delta = 0.0
     for p in passives:
         if getattr(p, "affected_value", None) != key:
+            continue
+        # v3.9.2 (B4): tick_per_turn passives are forecast-only — they
+        # apply on each turn advance, not statically to the value.
+        if getattr(p, "tick_per_turn", False):
             continue
         amount = float(getattr(p, "amount", 0.0) or 0.0)
         if getattr(p, "scope", "fixed") == "percent":

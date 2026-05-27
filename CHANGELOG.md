@@ -1,5 +1,56 @@
 # DnD Manager Changelog
 
+## v3.9.2 — Real-time passive bus + UX round 3 (B1/B2/B4)
+
+### Bug fixes
+- **Passives now update affected values everywhere in real time.**
+  v3.9.1 wired the editor's `changed` signal directly to the local
+  `_refresh_derived` — only the owning sheet refreshed. The compact
+  card / conflict panel never saw the change. v3.9.2 routes the
+  editor's `changed` through `state.character_changed.emit(...)`,
+  which broadcasts to every subscriber. Item / weapon / armor passive
+  editors in the Lists tab now route through `state.lists_changed`
+  the same way.
+- **Conflict tab labels swap to context.** When entering conflict the
+  compact card's tabs rename `Now → Status` and `Sheet → Passives`;
+  outside conflict they revert.
+- **Equipment tabs vertically scrollable on short windows.** The
+  grouped tab's inner widget now declares a 520 px minimum height
+  alongside the existing 280 px minimum width. Below either, the
+  scrollbars take over instead of squishing form rows.
+- **Integration audit.** Confirmed every passive source — character /
+  weapon-granted / weapon-inflicted / armor / spell / item-in-inventory
+  — flows through the same `collect_active_passives` pipeline and
+  reaches the effective columns, vital labels, and current-cap logic
+  in both the global character sheet and the compact card.
+
+### B1 — Quick-jump nav bar on the character sheet
+- Chip row at the top of the global Character Sheet listing every
+  section name. Click a chip → scrolls that section into view AND
+  expands it if collapsed.
+- "Sticky" sidebar would require restructuring the parent scroll
+  area; the jump bar at the top hits the same use case (one-click
+  navigation) without that surgery.
+
+### B2 — Forms editor multiplier bars
+- Each multiplier cell in the Forms table gets a bar painted along
+  the bottom — centered at 1.0×, green right (buff), red left
+  (debuff), clamped to 0..2× visually. Row height bumped slightly so
+  the bar doesn't collide with the cell text.
+
+### B4 — Status-effect per-turn preview
+- New `Passive.tick_per_turn` boolean. When True, the passive's
+  `amount` is treated as a per-turn tick (bleed / regen) rather than
+  a static modifier.
+- Passive editor exposes the new "per turn" checkbox alongside
+  active.
+- Static effective_value math IGNORES tick passives (they don't
+  shift the static current vital — they apply when the turn
+  advances).
+- Each vital bar shows a chip: `next turn: -10 (3t left)` in red for
+  net drain, green for net regen. Updates in real time as you edit
+  the passive.
+
 ## v3.9.1 — Bug fixes + UX round 2
 
 ### Bug fixes

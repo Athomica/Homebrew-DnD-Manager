@@ -21,6 +21,13 @@ class Passive:
     duration: str = "permanent"
     source: str = "character"
     active: bool = True
+    # v3.9.2 (B4): when True, the passive's `amount` is treated as a
+    # PER-TURN tick rather than a one-time static modifier. Used for
+    # bleed / regen-style status effects. The static effective-value
+    # math ignores tick_per_turn passives (they don't change the
+    # current vital until the turn actually advances); UI displays a
+    # forecast "next turn: ΔN (Nt left)" beside the affected vital.
+    tick_per_turn: bool = False
 
 
 @dataclass

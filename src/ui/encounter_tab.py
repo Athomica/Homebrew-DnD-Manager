@@ -213,9 +213,14 @@ class CompactCharacterCard(QFrame):
             sheet_sections.append(("🐺  Forms", forms))
         sheet = self._make_grouped_tab(sheet_sections)
 
-        self._tabs.addTab(combat, "Now")
+        # v3.9.2: in-conflict tab labels swap to reflect what each tab
+        # is actually for during a conflict — vital status to monitor,
+        # passives that are ticking.
+        now_label = "Status" if self._in_conflict else "Now"
+        sheet_label = "Passives" if self._in_conflict else "Sheet"
+        self._tabs.addTab(combat, now_label)
         self._tabs.addTab(gear, "Gear")
-        self._tabs.addTab(sheet, "Sheet")
+        self._tabs.addTab(sheet, sheet_label)
 
         # v3.4: listen to character_changed and lists_changed too, so things
         # like fall damage, spell lists, and equipment swaps reflect in real
@@ -274,13 +279,32 @@ class CompactCharacterCard(QFrame):
         wrap = QWidget()
         outer = QVBoxLayout(wrap)
         outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        # v3.9.2: use a custom QScrollArea sized to the sum of the
+        # sections' sizeHints. setWidgetResizable=True makes the inner
+        # widget match the viewport — which on short windows means it
+        # gets vertically COMPRESSED instead of scrolling. Using
+        # setWidgetResizable=False with manual width sync lets the
+        # vertical scrollbar appear whenever the content is taller
+        # than the viewport.
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         inner = QWidget()
-        inner.setMinimumWidth(280)  # smaller → horizontal scrollbar.
+        # Force a usable minimum size in both directions so the scroll
+        # area picks up the bars whenever the viewport is smaller than
+        # the natural content size.
+        inner.setMinimumWidth(280)
+        # Min height: roughly enough room for a typical Equipment +
+        # Inventory or Stats + Passives + Forms stack at standard row
+        # heights. Below this, vertical scroll appears.
+        inner.setMinimumHeight(520)
+        # Make the inner widget keep its natural size when not constrained.
+        inner.setSizePolicy(QSizePolicy.Policy.Preferred,
+                              QSizePolicy.Policy.Preferred)
         v = QVBoxLayout(inner)
         v.setContentsMargins(4, 4, 4, 4); v.setSpacing(10)
         for label_text, section in sections:
@@ -980,6 +1004,24 @@ class CompactCharacterCard(QFrame):
         self._mana_bar.set_effective(
             ev["mana"]["effective"], ev["mana_max"]["effective"],
             ev["mana"]["delta"], ev["mana_max"]["delta"])
+        # v3.9.2 (B4): per-turn forecast for bleed/regen-style passives.
+        all_p = me.collect_active_passives(
+            c, self._state.state.weapons, self._state.state.armors,
+            self._state.state.spells, self._state.state.items)
+        for vital, bar in (("health", self._hp_bar),
+                            ("stamina", self._stam_bar),
+                            ("mana", self._mana_bar)):
+            delta, ticking = me.per_turn_forecast(c, vital, all_p)
+            turns_left = None
+            for p in ticking:
+                d = (getattr(p, "duration", "") or "")
+                if d.startswith("turns:"):
+                    try:
+                        n = int(d.split(":", 1)[1])
+                        turns_left = n if turns_left is None else min(turns_left, n)
+                    except ValueError:
+                        pass
+            bar.set_tick_forecast(delta, turns_left)
         if self._fall_in.value() != c.fall_height:
             self._fall_in.blockSignals(True)
             self._fall_in.setValue(c.fall_height)

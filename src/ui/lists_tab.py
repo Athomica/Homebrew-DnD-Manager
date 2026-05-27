@@ -142,6 +142,13 @@ class WeaponsListTab(QWidget):
         inflict_l.addWidget(self._inflict_editor)
         form_outer.addWidget(inflict_grp)
 
+        # v3.9.2: live-broadcast edits via lists_changed so every
+        # character sheet currently displaying this weapon refreshes
+        # its Effective columns / vital labels in real time. Previously
+        # the passive editors fired `changed` but nothing was listening.
+        self._passive_editor.changed.connect(self._state.lists_changed.emit)
+        self._inflict_editor.changed.connect(self._state.lists_changed.emit)
+
         apply_btn = QPushButton("Apply"); apply_btn.setProperty("role", "primary")
         apply_btn.clicked.connect(self._on_apply)
         form_outer.addWidget(apply_btn)
@@ -332,6 +339,7 @@ class ArmorListTab(QWidget):
         self._passive_editor = PassiveListEditor(source_default="armor")
         pgrp_l.addWidget(self._passive_editor)
         form_outer.addWidget(pgrp)
+        self._passive_editor.changed.connect(self._state.lists_changed.emit)
 
         apply_btn = QPushButton("Apply"); apply_btn.setProperty("role", "primary")
         apply_btn.clicked.connect(self._on_apply)
@@ -810,6 +818,7 @@ class ItemsListTab(QWidget):
         pgrp_l = QVBoxLayout(pgrp)
         self._item_passive_editor = PassiveListEditor(source_default="item")
         pgrp_l.addWidget(self._item_passive_editor)
+        self._item_passive_editor.changed.connect(self._state.lists_changed.emit)
         form.addRow(pgrp)
         form.addRow("", apply_btn)
 

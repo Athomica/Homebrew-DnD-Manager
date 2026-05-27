@@ -98,6 +98,15 @@ class PassiveListEditor(QWidget):
         self._duration_turns.setVisible(False)
         self._active = QCheckBox("active")
         self._active.setChecked(True)
+        # v3.9.2 (B4): tick_per_turn turns this passive into a per-turn
+        # DoT/HoT. amount applies each turn rather than statically;
+        # the vital bar shows a forecast. Tooltip explains the
+        # semantics so users don't double-stack it.
+        self._tick = QCheckBox("per turn")
+        self._tick.setToolTip(
+            "Treat the amount as a per-turn tick (e.g. Bleed −5/turn) "
+            "instead of a static modifier. Affects current vitals "
+            "only; previewed beside the vital bar.")
         edit_row.addWidget(QLabel("Name:"))
         edit_row.addWidget(self._name, 1)
         edit_row.addWidget(QLabel("Amt:"))
@@ -108,6 +117,7 @@ class PassiveListEditor(QWidget):
         edit_row.addWidget(QLabel("Dur:"))
         edit_row.addWidget(self._duration)
         edit_row.addWidget(self._duration_turns)
+        edit_row.addWidget(self._tick)
         edit_row.addWidget(self._active)
         outer.addLayout(edit_row)
         self._refresh_amount_suffix()
@@ -141,6 +151,7 @@ class PassiveListEditor(QWidget):
         self._duration.currentIndexChanged.connect(self._on_apply_silent)
         self._duration_turns.valueChanged.connect(self._on_apply_silent)
         self._active.toggled.connect(self._on_apply_silent)
+        self._tick.toggled.connect(self._on_apply_silent)
         # Name updates only on editingFinished (avoids commit on every
         # keystroke, which would shuffle the list visually).
         self._name.editingFinished.connect(self._on_apply_silent)
@@ -160,6 +171,8 @@ class PassiveListEditor(QWidget):
         p.affected_value = self._current_affected_text()
         p.duration = self._duration_value()
         p.active = self._active.isChecked()
+        # v3.9.2 (B4)
+        p.tick_per_turn = self._tick.isChecked()
         # Refresh the list label in place so amount/source updates show
         # without re-selecting.
         item = self._list.item(row)
@@ -246,6 +259,8 @@ class PassiveListEditor(QWidget):
         self._select_affected(p.affected_value)
         self._set_duration_from_string(p.duration or "permanent")
         self._active.setChecked(p.active)
+        # v3.9.2 (B4)
+        self._tick.setChecked(bool(getattr(p, "tick_per_turn", False)))
 
     def _on_add(self) -> None:
         p = Passive(name=self._name.text() or "New Passive",
@@ -253,6 +268,7 @@ class PassiveListEditor(QWidget):
                     scope=self._scope.currentData() or "fixed",
                     affected_value=self._current_affected_text(),
                     duration=self._duration_value(),
+                    tick_per_turn=self._tick.isChecked(),
                     source=self._source_default,
                     active=self._active.isChecked())
         self._passives.append(p)
@@ -279,6 +295,7 @@ class PassiveListEditor(QWidget):
         p.affected_value = self._current_affected_text()
         p.duration = self._duration_value()
         p.active = self._active.isChecked()
+        p.tick_per_turn = self._tick.isChecked()
         self._refresh_list()
         self._list.setCurrentRow(row)
         self.changed.emit()
