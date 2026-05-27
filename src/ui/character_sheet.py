@@ -551,15 +551,19 @@ class CharacterSheet(QWidget):
              "Throw Result", "Effective Throw"])
         self._prof_table.verticalHeader().setVisible(False)
         h = self._prof_table.horizontalHeader()
+        # v3.9.3: switch data columns to ResizeToContents and bump the
+        # minimum section size — Fixed-with-setColumnWidth was silently
+        # collapsing column 2 ("Effective SP") to width 0 in some
+        # layouts, so the column existed but wasn't visible. Letting
+        # Qt size to content guarantees the header label fits at
+        # minimum.
+        h.setMinimumSectionSize(64)
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        self._prof_table.setColumnWidth(1, 80)
-        self._prof_table.setColumnWidth(2, 100)
-        self._prof_table.setColumnWidth(3, 100)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self._prof_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._prof_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
 
@@ -1677,7 +1681,12 @@ class CharacterSheet(QWidget):
         """
         is_dev = self._state.state.developer_view
         self._total_sp_label.setVisible(is_dev)
-        self._prof_table.setColumnHidden(2, not is_dev)
+        # v3.9.3: the proficiency table expanded from 4 to 6 columns in
+        # v3.9, but the dev-view toggle still hid column 2 — which used
+        # to be Dice Bonus and is now Effective SP. The user's main
+        # passive feedback column was effectively invisible outside
+        # Developer view. Dice Bonus moved to column 3.
+        self._prof_table.setColumnHidden(3, not is_dev)
         self._def_current_lbl.setVisible(is_dev)
         self._def_current_label.setVisible(is_dev)
         self._atk_current_lbl.setVisible(is_dev)

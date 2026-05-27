@@ -185,8 +185,30 @@ class PassiveListEditor(QWidget):
         self.changed.emit()
 
     def load(self, passives: list[Passive]) -> None:
+        """v3.9.3: preserve selection across refreshes. Refresh signals
+        fire often during a conflict (action toggle, use-shield, etc.),
+        and the editor's load() used to wipe the user's selection +
+        currently-displayed edit fields on every signal. That made
+        clicking "Apply Edits" feel like a no-op, because the visible
+        editor state snapped back to whatever passive ended up first
+        in the list after rebuild. Track the selected passive by id
+        and re-select it after the rebuild.
+        """
+        prev_id = None
+        try:
+            row = self._list.currentRow()
+            if 0 <= row < len(self._passives):
+                prev_id = getattr(self._passives[row], "id", None)
+        except Exception:
+            pass
         self._passives = passives
         self._refresh_list()
+        if prev_id is None:
+            return
+        for i, p in enumerate(self._passives):
+            if getattr(p, "id", None) == prev_id:
+                self._list.setCurrentRow(i)
+                return
 
     def _refresh_amount_suffix(self) -> None:
         scope = self._scope.currentData()
@@ -251,16 +273,32 @@ class PassiveListEditor(QWidget):
         if row < 0 or row >= len(self._passives):
             return
         p = self._passives[row]
-        self._name.setText(p.name)
-        self._amount.setValue(p.amount)
-        scope = getattr(p, "scope", "fixed")
-        self._scope.setCurrentIndex(0 if scope == "fixed" else 1)
-        self._refresh_amount_suffix()
-        self._select_affected(p.affected_value)
-        self._set_duration_from_string(p.duration or "permanent")
-        self._active.setChecked(p.active)
-        # v3.9.2 (B4)
-        self._tick.setChecked(bool(getattr(p, "tick_per_turn", False)))
+        # v3.9.3: block every form widget's signals while we
+        # populate them from the selected passive. Without this, each
+        # setValue / setCurrentIndex fires _on_apply_silent partway
+        # through the load — using whatever STALE fields haven't been
+        # updated yet — and clobbers the newly-selected passive with
+        # values from the previously-selected one. The user reported
+        # this as "selecting a passive overwrites the next one with
+        # the previous one's fields."
+        guarded = (self._name, self._amount, self._scope, self._affected,
+                    self._duration, self._duration_turns, self._active,
+                    self._tick)
+        for w in guarded:
+            w.blockSignals(True)
+        try:
+            self._name.setText(p.name)
+            self._amount.setValue(p.amount)
+            scope = getattr(p, "scope", "fixed")
+            self._scope.setCurrentIndex(0 if scope == "fixed" else 1)
+            self._refresh_amount_suffix()
+            self._select_affected(p.affected_value)
+            self._set_duration_from_string(p.duration or "permanent")
+            self._active.setChecked(p.active)
+            self._tick.setChecked(bool(getattr(p, "tick_per_turn", False)))
+        finally:
+            for w in guarded:
+                w.blockSignals(False)
 
     def _on_add(self) -> None:
         p = Passive(name=self._name.text() or "New Passive",

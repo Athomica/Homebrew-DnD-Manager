@@ -1,5 +1,37 @@
 # DnD Manager Changelog
 
+## v3.9.3 — Three passive bugs
+
+### Effective SP column was invisible
+The Proficiency table grew from 4 to 6 columns in v3.9, but the
+dev-view toggle still ran `setColumnHidden(2, not is_dev)` — which
+used to hide Dice Bonus and now hides **Effective SP**. The most
+important passive-feedback column was effectively invisible outside
+Developer view. Index moved to column 3 (Dice Bonus).
+
+### Apply Edits didn't work in conflict
+Two root causes, both fixed:
+- **Selection wiped on every refresh.** During a conflict, signals
+  fire constantly (action toggles, use-shield, etc.) and each one
+  re-ran `PassiveListEditor.load(...)`, which rebuilt the QListWidget
+  and dropped the user's selection. The form fields then jumped to
+  whatever passive ended up first. `load()` now remembers the
+  selected passive by id and re-selects it after the rebuild.
+- **Live-commit cross-contamination.** When the user clicked a row,
+  `_on_row_changed` set the form widgets one by one — and every
+  setter triggered the live-commit (`_on_apply_silent`), which wrote
+  the *partially-loaded* form back to the newly-selected passive.
+  The selected passive ended up with the previous row's `affected_value`,
+  `duration`, etc. Reported as "selecting a passive overwrites it with
+  the previous one's fields." `_on_row_changed` now blocks every
+  form widget's signals while it loads.
+
+### "When I don't have a passive selected and I change a value below,
+all the passives get updated"
+Same root cause as the previous bullet — the cross-contamination ran
+through `_on_row_changed` whenever the user clicked between passives.
+The blocking-signals fix eliminates it.
+
 ## v3.9.2 — Real-time passive bus + UX round 3 (B1/B2/B4)
 
 ### Bug fixes
