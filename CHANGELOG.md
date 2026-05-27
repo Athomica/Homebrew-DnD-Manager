@@ -1,5 +1,27 @@
 # DnD Manager Changelog
 
+## v3.7.6 — Fix X11 modifier-key segfault (root cause)
+
+The faultlog from v3.7.5 revealed the real bug: a segfault inside
+libxkbcommon, fired the moment any modifier key (Ctrl, Shift, Alt) is
+pressed on X11. PyInstaller bundles the xcb platform plugin but NOT
+the multi-megabyte xkb configuration tree, so `libxkbcommon` runs with
+nothing to read and crashes on the first keyboard event. Ctrl+S
+"working from the menu" was just a coincidence — the menu click didn't
+need keyboard state, the shortcut did.
+
+Fixes:
+
+- **`XKB_CONFIG_ROOT` / `QT_XKB_CONFIG_ROOT` set in the runtime hook.**
+  When running frozen on Linux, point libxkbcommon at the system's
+  `/usr/share/X11/xkb` (or `/usr/local/share/X11/xkb`). This is the
+  same data every distro ships; we just have to tell Qt where it is.
+- **Crash-recovery prompt deferred to after `show()`.** Running a
+  modal `QMessageBox.question(...)` from inside `MainWindow.__init__`
+  before the toplevel is mapped is known to mishandle key routing on
+  xcb. v3.7.6 fires it via `QTimer.singleShot(0, ...)` so the event
+  loop has serviced the show + initial focus events first.
+
 ## v3.7.5 — Defensive Ctrl+S + faulthandler for segfaults
 
 The user reported Ctrl+S still crashing on X11 with no log file. Two

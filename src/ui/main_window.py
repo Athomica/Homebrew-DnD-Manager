@@ -33,7 +33,7 @@ from ui.components.scaling_modifiers import ScalingModifiersPanel
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("DnD Manager v3.7.5")
+        self.setWindowTitle("DnD Manager v3.7.6")
         self.resize(1400, 900)
         self.setMinimumSize(900, 700)
 
@@ -99,21 +99,32 @@ class MainWindow(QMainWindow):
         self._refresh_total_turns({})
         self._refresh_view_mode()
 
-        # Crash recovery
+        # v3.7.6: defer the crash-recovery prompt until AFTER the window
+        # has finished showing on X11. Popping a modal QMessageBox from
+        # inside __init__ (before the main window is mapped) is known to
+        # interact badly with the xcb platform plugin — early key
+        # events route through libxkbcommon while the toplevel isn't
+        # yet realized, and on some X11 setups that segfaults. Running
+        # it from a 0-ms QTimer means the event loop has serviced the
+        # show + initial focus events first.
         latest = self._state.latest_autosave()
         if latest is not None and latest.exists():
-            try:
-                reply = QMessageBox.question(
-                    self, "Restore?",
-                    f"An auto-save was found at\n{latest}\nLoad it?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply == QMessageBox.StandardButton.Yes:
-                    self._state.load_from(latest)
-                    self.statusBar().showMessage(f"Loaded autosave {latest.name}", 4000)
-            except Exception:
-                pass
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._prompt_restore_autosave(latest))
+
+    def _prompt_restore_autosave(self, latest) -> None:
+        try:
+            reply = QMessageBox.question(
+                self, "Restore?",
+                f"An auto-save was found at\n{latest}\nLoad it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._state.load_from(latest)
+                self.statusBar().showMessage(f"Loaded autosave {latest.name}", 4000)
+        except Exception:
+            pass
 
     def _refresh_total_turns_ignore(self) -> None:
         self._refresh_total_turns({})
@@ -319,7 +330,7 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         QMessageBox.about(
             self, "About DnD Manager",
-            "DnD Manager v3.7.5\n\n"
+            "DnD Manager v3.7.6\n\n"
             "A solo Dungeon Master's tool for a homebrew dark-fantasy TTRPG.\n\n"
             "Targets KDE Plasma on Wayland (X11 fallback) on Linux.\n"
             "No dice rolling, no networking, no AI."

@@ -24,6 +24,23 @@ def _setup_qt_platform() -> None:
         if os.path.isdir(platforms_dir):
             os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = platforms_dir
 
+    # v3.7.6: tell the bundled libxkbcommon where the system keeps its
+    # xkb compose / keymap data. PyInstaller's PyQt6 includes the xcb
+    # platform plugin but does NOT bundle the multi-megabyte xkb config
+    # tree, so the plugin looks for it on disk. On X11 sessions, when
+    # the lookup fails, simply pressing a modifier key (Ctrl, Shift,
+    # Alt) segfaults inside libxkbcommon. Pointing these env vars at
+    # the system locations fixes it on every distro that follows the
+    # FHS.
+    if "XKB_CONFIG_ROOT" not in os.environ:
+        for candidate in ("/usr/share/X11/xkb",
+                          "/usr/local/share/X11/xkb"):
+            if os.path.isdir(candidate):
+                os.environ["XKB_CONFIG_ROOT"] = candidate
+                break
+    if "QT_XKB_CONFIG_ROOT" not in os.environ and "XKB_CONFIG_ROOT" in os.environ:
+        os.environ["QT_XKB_CONFIG_ROOT"] = os.environ["XKB_CONFIG_ROOT"]
+
     # Honor any explicit user override
     if "QT_QPA_PLATFORM" in os.environ:
         return
