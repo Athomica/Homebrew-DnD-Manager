@@ -1411,6 +1411,37 @@ class StateManager(QObject):
         receive("right", right.character, left.character, left_dmg)
         receive("left", left.character, right.character, right_dmg)
 
+        # v3.9: a weapon's inflict_passives attach to whatever it just
+        # hit. Only fires when the attacker did real damage AND the
+        # attacker's action was 'attack' (a Cast doesn't carry the
+        # weapon's status payload). The inflicted passive is deep-copied
+        # so editing it on the victim doesn't mutate the source weapon.
+        def _apply_weapon_inflictions(attacker: Character,
+                                       defender: Character,
+                                       atk_action: str,
+                                       outgoing: float) -> None:
+            if outgoing <= 0 or atk_action != "attack":
+                return
+            weapon = attacker.get_active_weapon(self.state.weapons)
+            if weapon is None:
+                return
+            for tmpl in getattr(weapon, "inflict_passives", []) or []:
+                if not getattr(tmpl, "active", True):
+                    continue
+                import copy as _copy
+                p = _copy.deepcopy(tmpl)
+                p.id = new_id("p")
+                p.source = f"weapon:{weapon.name}"
+                defender.passives.append(p)
+                msgs.append(
+                    f"{defender.name} suffers '{p.name}' from "
+                    f"{attacker.name}'s {weapon.name}")
+
+        _apply_weapon_inflictions(left.character, right.character,
+                                    enc.left_action, left_dmg)
+        _apply_weapon_inflictions(right.character, left.character,
+                                    enc.right_action, right_dmg)
+
         # --- non-attack actions on each side ---
         for side, inst, action, attacker in (
             ("left", left, enc.left_action, right.character),

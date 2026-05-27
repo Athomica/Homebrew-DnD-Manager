@@ -40,7 +40,13 @@ class Weapon:
     # ONLY when the weapon is sitting in the inventory; equipped weapons
     # contribute zero.
     slot_count: int = 1
+    # v3.9: passives the weapon grants its WIELDER while equipped, and
+    # passives the weapon INFLICTS on whatever it hits in a conflict.
+    # `passives` already existed as "granted to wielder"; `inflict_passives`
+    # is new — each entry is a Passive description that gets attached
+    # to the victim's status list when this weapon lands damage.
     passives: list[Passive] = field(default_factory=list)
+    inflict_passives: list[Passive] = field(default_factory=list)
     description: str = ""
 
 
@@ -122,6 +128,10 @@ class Item:
     hp_effect: int = 0
     stamina_effect: int = 0
     mana_effect: int = 0
+    # v3.9: an item can carry passives that apply to the character
+    # while it's in their inventory (e.g. a charm of vigor that grants
+    # +20 health_max). Apply persists for the duration of possession.
+    passives: list[Passive] = field(default_factory=list)
 
 
 @dataclass

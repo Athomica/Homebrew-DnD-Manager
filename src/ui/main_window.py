@@ -31,13 +31,24 @@ from ui.components.scaling_modifiers import ScalingModifiersPanel
 
 
 class MainWindow(QMainWindow):
+    BASE_TITLE = "DnD Manager v3.9"
+
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("DnD Manager v3.8.1")
+        self.setWindowTitle(self.BASE_TITLE)
         self.resize(1400, 900)
         self.setMinimumSize(900, 700)
 
         self._state = StateManager(self)
+        # v3.9 (A3): track in-memory dirty state. Title-bar shows " *"
+        # whenever there are unsaved changes. Signals from StateManager
+        # bump dirty; save_current / save_to clear it.
+        self._dirty = False
+        for sig in (self._state.character_changed,
+                    self._state.lists_changed,
+                    self._state.encounter_changed,
+                    self._state.modifiers_changed):
+            sig.connect(self._mark_dirty)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -226,6 +237,23 @@ class MainWindow(QMainWindow):
                 f"Could not start a new campaign:\n\n{exc}\n\n"
                 f"Traceback:\n{tb[-1500:]}")
 
+    def _mark_dirty(self, *_args) -> None:
+        if not self._dirty:
+            self._dirty = True
+            self._update_title()
+
+    def _mark_clean(self) -> None:
+        if self._dirty:
+            self._dirty = False
+            self._update_title()
+
+    def _update_title(self) -> None:
+        path_part = ""
+        if self._state._current_save_path is not None:
+            path_part = f" — {self._state._current_save_path.name}"
+        marker = " *" if self._dirty else ""
+        self.setWindowTitle(f"{self.BASE_TITLE}{path_part}{marker}")
+
     # v3.7.4: force Qt's own file dialog widget instead of the platform
     # native dialog. The "native" dialog uses xdg-desktop-portal on Linux,
     # which on plain X11 sessions without the portal installed crashes
@@ -255,6 +283,7 @@ class MainWindow(QMainWindow):
         # path runs ahead of the save and can race with refresh signals.
         try:
             if self._state.save_current():
+                self._mark_clean()
                 self.statusBar().showMessage("Saved.", 2000)
             else:
                 self._on_save_as()
@@ -275,8 +304,15 @@ class MainWindow(QMainWindow):
 
     def _on_save_as(self) -> None:
         SAVES_DIR.mkdir(parents=True, exist_ok=True)
+        # v3.9 (C4): default the filename to the campaign name (sanitized),
+        # falling back to "campaign.json" if the campaign hasn't been
+        # named yet.
+        raw_name = (self._state.state.campaign_name or "campaign").strip()
+        safe = "".join(ch if ch.isalnum() or ch in "-_. " else "_"
+                        for ch in raw_name).strip().replace(" ", "_") or "campaign"
+        default = SAVES_DIR / f"{safe}.json"
         path_s, _ = QFileDialog.getSaveFileName(
-            self, "Save As", str(SAVES_DIR / "campaign.json"),
+            self, "Save As", str(default),
             "JSON saves (*.json)", options=self._FD_OPT)
         if not path_s:
             return
@@ -285,6 +321,8 @@ class MainWindow(QMainWindow):
             path = path.with_suffix(".json")
         try:
             self._state.save_to(path)
+            self._mark_clean()
+            self._update_title()
             self.statusBar().showMessage(f"Saved to {path.name}", 3000)
         except Exception as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
@@ -330,7 +368,7 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         QMessageBox.about(
             self, "About DnD Manager",
-            "DnD Manager v3.8.1\n\n"
+            "DnD Manager v3.9\n\n"
             "A solo Dungeon Master's tool for a homebrew dark-fantasy TTRPG.\n\n"
             "Targets KDE Plasma on Wayland (X11 fallback) on Linux.\n"
             "No dice rolling, no networking, no AI."

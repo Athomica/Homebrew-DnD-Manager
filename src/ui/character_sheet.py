@@ -869,12 +869,42 @@ class CharacterSheet(QWidget):
     # Passives
     # ------------------------------------------------------------------
     def _build_passives_section(self) -> QWidget:
+        """v3.9 (C6): four-section passive view. The editor on top
+        owns the character's own passives (Permanent + Inflicted —
+        distinguished by the `duration` field per entry; the editor
+        already exposes that). Two read-only lists below display the
+        passives this character is currently receiving from equipped
+        gear and inventory items — those have to be edited at the
+        source.
+        """
+        from PyQt6.QtWidgets import QListWidget
         wrap = QWidget()
         outer = QVBoxLayout(wrap)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(8)
+
+        header_style = ("background:{bg}; color:{fg}; padding:4px 8px; "
+                        "border-radius:4px; font-weight:bold;")
+
+        own = QLabel("Permanent & Inflicted  (use the duration field to tag a status effect)")
+        own.setStyleSheet(header_style.format(bg="#2a3445", fg="#aacfff"))
+        outer.addWidget(own)
         self._passive_editor = PassiveListEditor(source_default="character")
         self._passive_editor.changed.connect(self._refresh_derived)
-        outer.addWidget(Resizable(self._passive_editor, initial_height=220))
+        outer.addWidget(Resizable(self._passive_editor, initial_height=200))
+
+        eq_header = QLabel("Equipment-derived  (edit on the source weapon / armor / spell)")
+        eq_header.setStyleSheet(header_style.format(bg="#2a3a30", fg="#a0d0b0"))
+        outer.addWidget(eq_header)
+        self._eq_passive_list = QListWidget()
+        self._eq_passive_list.setMaximumHeight(110)
+        outer.addWidget(self._eq_passive_list)
+
+        item_header = QLabel("From Items  (edit on the source item in the Lists tab)")
+        item_header.setStyleSheet(header_style.format(bg="#3a3a2a", fg="#d0c898"))
+        outer.addWidget(item_header)
+        self._item_passive_list = QListWidget()
+        self._item_passive_list.setMaximumHeight(110)
+        outer.addWidget(self._item_passive_list)
         return wrap
 
     # ------------------------------------------------------------------
@@ -1215,7 +1245,8 @@ class CharacterSheet(QWidget):
             # past the stored max when a passive bumps health_max etc.
             ev = me.effective_vitals(
                 self._char, self._state.state.weapons,
-                self._state.state.armors, self._state.state.spells)
+                self._state.state.armors, self._state.state.spells,
+                self._state.state.items)
             self._hp_bar.set_effective(
                 ev["health"]["effective"], ev["health_max"]["effective"],
                 ev["health"]["delta"], ev["health_max"]["delta"])
@@ -1264,8 +1295,25 @@ class CharacterSheet(QWidget):
             if self._char.role != "npc":
                 self._refresh_forms()
 
-            # Passive list editor
+            # Passive list editor (Permanent + Inflicted, character-owned)
             self._passive_editor.load(self._char.passives)
+            # v3.9 (C6): populate Equipment-derived + From Items lists.
+            sources = me.passive_sources(
+                self._char, self._state.state.weapons,
+                self._state.state.armors, self._state.state.spells,
+                self._state.state.items)
+            self._eq_passive_list.clear()
+            for src_obj, p in sources["equipment"]:
+                unit = "%" if p.scope == "percent" else ""
+                self._eq_passive_list.addItem(
+                    f"{src_obj.name}: {p.name} ({p.amount:+.1f}{unit} on "
+                    f"{p.affected_value or '?'}, {p.duration})")
+            self._item_passive_list.clear()
+            for src_obj, p in sources["items"]:
+                unit = "%" if p.scope == "percent" else ""
+                self._item_passive_list.addItem(
+                    f"{src_obj.name}: {p.name} ({p.amount:+.1f}{unit} on "
+                    f"{p.affected_value or '?'}, {p.duration})")
 
             # Encounter history
             if hasattr(self, "_encounter_history_list"):
@@ -1302,7 +1350,8 @@ class CharacterSheet(QWidget):
         # on weapons / armor / spells show up in effective columns).
         profs = me.derive_proficiency_view(
             self._char, self._state.state.weapons,
-            self._state.state.armors, self._state.state.spells)
+            self._state.state.armors, self._state.state.spells,
+            self._state.state.items)
         row = 0
         for attr_name, (p1, p2) in ATTRIBUTES.items():
             total = self._char.attribute_total(attr_name)

@@ -326,11 +326,15 @@ def luck_tier_sum_for(character: Character) -> float:
 def collect_active_passives(character: Character,
                               weapons: Optional[list] = None,
                               armors: Optional[list] = None,
-                              spells: Optional[list] = None) -> list:
-    """v3.8: gather every active Passive that can currently affect this
-    character. Includes the character's own .passives plus the .passives
-    on any equipped weapon, shield, armor piece, or castable spell.
-    Inactive passives are excluded."""
+                              spells: Optional[list] = None,
+                              items: Optional[list] = None) -> list:
+    """v3.8/v3.9: gather every active Passive that can currently affect
+    this character. Sources:
+      - character.passives (permanent + inflicted)
+      - .passives on equipped weapon, shield, armor pieces, spells
+      - v3.9: .passives on items sitting in the inventory
+    Inactive passives are excluded.
+    """
     out: list = []
     for p in getattr(character, "passives", []) or []:
         if getattr(p, "active", True):
@@ -363,6 +367,88 @@ def collect_active_passives(character: Character,
         for p in getattr(obj, "passives", []) or []:
             if getattr(p, "active", True):
                 out.append(p)
+    # v3.9: inventory items grant their passives while held.
+    if items:
+        items_by_id = {it.id: it for it in items}
+        for entry in getattr(character, "inventory", []) or []:
+            iid = getattr(entry, "item_id", None)
+            if not iid:
+                continue
+            it = items_by_id.get(iid)
+            if it is None:
+                continue
+            for p in getattr(it, "passives", []) or []:
+                if getattr(p, "active", True):
+                    out.append(p)
+    return out
+
+
+def passive_sources(character: Character,
+                     weapons: Optional[list] = None,
+                     armors: Optional[list] = None,
+                     spells: Optional[list] = None,
+                     items: Optional[list] = None
+                     ) -> dict[str, list]:
+    """v3.9: same collection as collect_active_passives, but grouped by
+    UI category for the four-section passive editor:
+      'permanent'   — character.passives whose source is 'character'
+                      (or unset) and duration is 'permanent'.
+      'inflicted'   — character.passives with a non-permanent duration
+                      OR whose source flags them as a status effect.
+      'equipment'   — passives on equipped weapon/shield/armor/spell.
+      'items'       — passives on items sitting in the inventory.
+    """
+    out: dict[str, list] = {
+        "permanent": [], "inflicted": [], "equipment": [], "items": [],
+    }
+    for p in getattr(character, "passives", []) or []:
+        if not getattr(p, "active", True):
+            continue
+        duration = (getattr(p, "duration", "permanent") or "permanent")
+        if duration == "permanent":
+            out["permanent"].append(p)
+        else:
+            out["inflicted"].append(p)
+    by_id = {}
+    if weapons:
+        by_id.update({w.id: w for w in weapons})
+    if armors:
+        by_id.update({a.id: a for a in armors})
+    if spells:
+        by_id.update({s.id: s for s in spells})
+    equipped_ids = (
+        getattr(character, "primary_weapon_id", None),
+        getattr(character, "secondary_weapon_id", None),
+        getattr(character, "shield_id", None),
+        getattr(character, "helmet_id", None),
+        getattr(character, "chest_id", None),
+        getattr(character, "gloves_id", None),
+        getattr(character, "pants_id", None),
+        getattr(character, "boots_id", None),
+        getattr(character, "primary_spell_id", None),
+        getattr(character, "secondary_spell_id", None),
+    )
+    for eid in equipped_ids:
+        if not eid:
+            continue
+        obj = by_id.get(eid)
+        if obj is None:
+            continue
+        for p in getattr(obj, "passives", []) or []:
+            if getattr(p, "active", True):
+                out["equipment"].append((obj, p))
+    if items:
+        items_by_id = {it.id: it for it in items}
+        for entry in getattr(character, "inventory", []) or []:
+            iid = getattr(entry, "item_id", None)
+            if not iid:
+                continue
+            it = items_by_id.get(iid)
+            if it is None:
+                continue
+            for p in getattr(it, "passives", []) or []:
+                if getattr(p, "active", True):
+                    out["items"].append((it, p))
     return out
 
 
@@ -391,7 +477,8 @@ def effective_value(base: float, key: str, passives: list) -> tuple[float, float
 def effective_vitals(character: Character,
                       weapons: Optional[list] = None,
                       armors: Optional[list] = None,
-                      spells: Optional[list] = None
+                      spells: Optional[list] = None,
+                      items: Optional[list] = None
                       ) -> dict[str, dict[str, float]]:
     """v3.8: per-vital effective values + delta from form + passives.
 
@@ -407,7 +494,7 @@ def effective_vitals(character: Character,
     form_mult was baked into "raw", which made identical-shape buffs
     invisible to the green/red coloring.
     """
-    passives = collect_active_passives(character, weapons, armors, spells)
+    passives = collect_active_passives(character, weapons, armors, spells, items)
     out: dict[str, dict[str, float]] = {}
     for vital in ("health", "stamina", "mana"):
         raw_max = float(getattr(character, f"{vital}_max", 0) or 0)
@@ -431,12 +518,13 @@ def effective_vitals(character: Character,
 def derive_proficiency_view(character: Character,
                             weapons: Optional[list] = None,
                             armors: Optional[list] = None,
-                            spells: Optional[list] = None
+                            spells: Optional[list] = None,
+                            items: Optional[list] = None
                             ) -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     lts = luck_tier_sum_for(character)
     dice = character.dice
-    passives = collect_active_passives(character, weapons, armors, spells)
+    passives = collect_active_passives(character, weapons, armors, spells, items)
     for p in PROFICIENCIES:
         # v3.8.1: "raw" is the truly stored proficiency SP — no form
         # multiplier. The effective value layers form mult AND any

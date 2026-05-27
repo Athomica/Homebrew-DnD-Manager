@@ -72,6 +72,20 @@ def _fade_in(widget: QWidget, duration_ms: int = 220) -> None:
 class CompactCharacterCard(QFrame):
     arrows_clicked = pyqtSignal(int)
 
+    # v3.9 (B5): when the card has focus, Left / Right arrows cycle
+    # the active participant. Same handler as the on-screen ◀ prev /
+    # next ▶ buttons.
+    def keyPressEvent(self, event):  # noqa: N802
+        try:
+            from PyQt6.QtCore import Qt as _Qt
+            if event.key() == _Qt.Key.Key_Left:
+                self.arrows_clicked.emit(-1); return
+            if event.key() == _Qt.Key.Key_Right:
+                self.arrows_clicked.emit(+1); return
+        except Exception:
+            pass
+        super().keyPressEvent(event)
+
     def __init__(self, state: StateManager, instance: EncounterInstance,
                  side: str, current_idx: int, total: int,
                  in_conflict: bool = False,
@@ -84,6 +98,8 @@ class CompactCharacterCard(QFrame):
         # being resolved — KP/SP accumulators only matter between
         # conflicts. Pass-through to the tab assembler below.
         self._in_conflict = in_conflict
+        # v3.9 (B5): focusable so Left/Right arrow keys cycle.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setObjectName("EncounterCardRoot")
         self._normal_style = ""
         self._conflict_style = (
@@ -329,8 +345,10 @@ class CompactCharacterCard(QFrame):
         self._mana_bar.max_input.valueChanged.connect(
             lambda val: self._set_field("mana_max", val))
 
-        # v3.4.6: combat numbers as a single horizontal strip with color
-        # categories (red = offense, blue = defense, magenta = HP loss).
+        # v3.4.6 / v3.9 (A4): combat numbers as two rows now — offense on
+        # top (red), defense + Health-loss below (blue / magenta). Two
+        # rows let each chip breathe at narrow card widths instead of
+        # truncating in a single strip.
         self._martial_lbl = QLabel("0"); self._ranged_lbl = QLabel("0")
         self._arcana_lbl = QLabel("0"); self._stealth_lbl = QLabel("0")
         self._def_lbl = QLabel("0"); self._dodge_lbl = QLabel("0")
@@ -338,8 +356,10 @@ class CompactCharacterCard(QFrame):
         strip = QFrame()
         strip.setStyleSheet(
             "QFrame { background-color: #181818; border-radius: 4px; }")
-        sl = QHBoxLayout(strip)
-        sl.setContentsMargins(6, 4, 6, 4); sl.setSpacing(0)
+        strip_l = QVBoxLayout(strip)
+        strip_l.setContentsMargins(6, 4, 6, 4); strip_l.setSpacing(2)
+        row_off = QHBoxLayout(); row_off.setSpacing(0)
+        row_def = QHBoxLayout(); row_def.setSpacing(0)
 
         def _chip(lbl_text, val_lbl, color):
             box = QHBoxLayout(); box.setSpacing(3)
@@ -354,22 +374,21 @@ class CompactCharacterCard(QFrame):
         offense_color = "#e07070"
         defense_color = "#70a4e0"
         hp_color = "#d460a0"
-        sl.addWidget(_chip("MAR", self._martial_lbl, offense_color))
-        sl.addWidget(_chip("RNG", self._ranged_lbl, offense_color))
-        sl.addWidget(_chip("ARC", self._arcana_lbl, offense_color))
-        sl.addWidget(_chip("STH", self._stealth_lbl, offense_color))
-        # Visual divider
+        for cap, lbl in (("MAR", self._martial_lbl), ("RNG", self._ranged_lbl),
+                          ("ARC", self._arcana_lbl), ("STH", self._stealth_lbl)):
+            row_off.addWidget(_chip(cap, lbl, offense_color))
+        row_off.addStretch(1)
+        for cap, lbl in (("DEF", self._def_lbl), ("DOD", self._dodge_lbl)):
+            row_def.addWidget(_chip(cap, lbl, defense_color))
         div = QFrame(); div.setFrameShape(QFrame.Shape.VLine)
         div.setStyleSheet("background-color: #333; max-width: 1px;")
-        sl.addWidget(div)
-        sl.addWidget(_chip("DEF", self._def_lbl, defense_color))
-        sl.addWidget(_chip("DOD", self._dodge_lbl, defense_color))
-        div2 = QFrame(); div2.setFrameShape(QFrame.Shape.VLine)
-        div2.setStyleSheet("background-color: #333; max-width: 1px;")
-        sl.addWidget(div2)
-        sl.addWidget(_chip("Health↓", self._hploss_lbl, hp_color))
-        sl.addWidget(_chip("Health↓sh", self._sh_hploss_lbl, hp_color))
-        sl.addStretch(1)
+        row_def.addWidget(div)
+        for cap, lbl in (("Health↓", self._hploss_lbl),
+                          ("Health↓sh", self._sh_hploss_lbl)):
+            row_def.addWidget(_chip(cap, lbl, hp_color))
+        row_def.addStretch(1)
+        strip_l.addLayout(row_off)
+        strip_l.addLayout(row_def)
         v.addWidget(strip)
 
         # Fall height + checkbox
@@ -1077,6 +1096,9 @@ class ConflictPanel(QGroupBox):
         for key, label in ACTIONS:
             icon, _name, accent = self.ACTION_META[key]
             btn = QPushButton(f"{icon} {label}")
+            btn._action_icon = icon
+            btn._action_label = label
+            btn.setToolTip(label)
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(
@@ -1090,6 +1112,10 @@ class ConflictPanel(QGroupBox):
             action_buttons[key] = btn
             btn.toggled.connect(self._on_action_toggled_factory(side, key))
             action_row.addWidget(btn, 1)
+        # v3.9 (C3): icon-only when the side panel is too narrow to fit
+        # all five labels comfortably. Triggered from refresh() since
+        # that runs when the panel is laid out.
+        box._action_buttons_list = list(action_buttons.values())
         action_buttons["attack"].blockSignals(True)
         action_buttons["attack"].setChecked(True)
         action_buttons["attack"].blockSignals(False)
@@ -1334,21 +1360,38 @@ class ConflictPanel(QGroupBox):
             right_final = self._final_damage_received(
                 r["inst"].character, r["action"], r["use_shield"],
                 l["inst"].character, l_raw)
+            # v3.9 (A2): wrap to two lines when the side panel is
+            # narrower than ~280px. The panel width is a good proxy
+            # for column width here.
+            two_line = self._left_col["outcome"].width() < 280
+            # v3.9 (C3): icon-only action buttons when narrow.
+            for col in (self._left_col, self._right_col):
+                box_w = col["box"].width()
+                icon_only = box_w < 360
+                for btn in getattr(col["box"], "_action_buttons_list", []):
+                    btn.setText(btn._action_icon if icon_only
+                                else f"{btn._action_icon} {btn._action_label}")
             self._left_col["outcome"].setText(
                 self._format_outcome(l["atk_val"], left_final,
-                                       l["stam_cost"], l["mana_cost"]))
+                                       l["stam_cost"], l["mana_cost"],
+                                       two_line=two_line))
             self._right_col["outcome"].setText(
                 self._format_outcome(r["atk_val"], right_final,
-                                       r["stam_cost"], r["mana_cost"]))
+                                       r["stam_cost"], r["mana_cost"],
+                                       two_line=two_line))
 
     @staticmethod
-    def _format_outcome(dealt: float, recv: float, stam: int, mana: int) -> str:
-        """One-line outcome string for a side, color-coded inline."""
+    def _format_outcome(dealt: float, recv: float, stam: int, mana: int,
+                          two_line: bool = False) -> str:
+        """v3.9 (A2): outcome row. Wraps to two lines (damage on top,
+        costs below) when the side panel is too narrow to fit four
+        chips on one line."""
+        sep = "<br>" if two_line else " &nbsp;·&nbsp; "
         return (
             f"<span style='color:#7fd194;'><b>Dealt</b> {dealt:.1f}</span>"
             f" &nbsp;·&nbsp; "
             f"<span style='color:#f76b66;'><b>Recv</b> {recv:.1f}</span>"
-            f" &nbsp;·&nbsp; "
+            f"{sep}"
             f"<span style='color:#e07a4a;'>-{stam} SP</span>"
             f" &nbsp;·&nbsp; "
             f"<span style='color:#4a9ad7;'>-{mana} MP</span>"
@@ -1424,6 +1467,21 @@ class EncounterTab(QWidget):
         new_enc_btn.clicked.connect(self._on_new_encounter)
         enc_tabs_row.addWidget(new_enc_btn)
         outer.addLayout(enc_tabs_row)
+
+        # v3.9 (C5): keyboard shortcuts on the encounter tab strip.
+        #   Ctrl+Tab        next encounter
+        #   Ctrl+Shift+Tab  previous encounter
+        #   Ctrl+1..9       jump to encounter N
+        #   Ctrl+W          close current encounter (with confirm)
+        from PyQt6.QtGui import QShortcut, QKeySequence as _QKS
+        QShortcut(_QKS("Ctrl+Tab"), self,
+                   activated=lambda: self._cycle_enc_tab(+1))
+        QShortcut(_QKS("Ctrl+Shift+Tab"), self,
+                   activated=lambda: self._cycle_enc_tab(-1))
+        QShortcut(_QKS("Ctrl+W"), self, activated=self._close_current_enc_tab)
+        for i in range(1, 10):
+            QShortcut(_QKS(f"Ctrl+{i}"), self,
+                       activated=lambda n=i - 1: self._jump_enc_tab(n))
 
         # v3.4.6: the old top toolbar (Start / name field / Begin Combat /
         # End Encounter) is gone. Per-tab actions live on the encounter tab
@@ -1556,6 +1614,23 @@ class EncounterTab(QWidget):
     def _on_start_encounter(self) -> None:
         if self._state.state.active_encounter is None:
             self._state.start_encounter()
+
+    # v3.9 (C5): keyboard nav helpers.
+    def _cycle_enc_tab(self, delta: int) -> None:
+        n = self._enc_tab_bar.count()
+        if n <= 1:
+            return
+        cur = self._enc_tab_bar.currentIndex()
+        self._enc_tab_bar.setCurrentIndex((cur + delta) % n)
+
+    def _jump_enc_tab(self, idx: int) -> None:
+        if 0 <= idx < self._enc_tab_bar.count():
+            self._enc_tab_bar.setCurrentIndex(idx)
+
+    def _close_current_enc_tab(self) -> None:
+        idx = self._enc_tab_bar.currentIndex()
+        if idx >= 0:
+            self._on_close_encounter_tab(idx)
 
     # v3.4.6: Tab close button = End Encounter (with confirmation).
     def _on_close_encounter_tab(self, idx: int) -> None:
@@ -1746,10 +1821,14 @@ class EncounterTab(QWidget):
             chars = {"party": self._state.state.party,
                      "mob": self._state.state.mobs,
                      "npc": self._state.state.npcs}[role]
-            section = [c for c in chars
-                        if not c.is_deceased
-                        and (not self._roster_search
-                              or self._roster_search in c.name.lower())]
+            # v3.9 (A5): sort alphabetically within the role section so a
+            # long roster stays scannable. Search filter still applies first.
+            section = sorted(
+                (c for c in chars
+                 if not c.is_deceased
+                 and (not self._roster_search
+                      or self._roster_search in c.name.lower())),
+                key=lambda c: c.name.lower())
             rows: list[QWidget] = []
             for c in section:
                 row = self._build_roster_row(c, enc, already_assigned)
@@ -1907,7 +1986,36 @@ class EncounterTab(QWidget):
         for inst in binned:
             btn = QPushButton(inst.character.name)
             btn.setStyleSheet("QPushButton { background-color: #471323; color: white; }")
-            btn.clicked.connect(lambda _c, iid=inst.instance_id: self._state.restore_instance_from_bin(iid))
+            # v3.9 (B6): two-click confirm — first click swaps the label
+            # to "Restore?", second click actually restores. Click anywhere
+            # else (or wait ~3s) and the button reverts. Cheaper than a
+            # modal dialog for the common case.
+            btn._confirming = False
+            btn._orig_label = inst.character.name
+            def _make_handler(button, iid):
+                from PyQt6.QtCore import QTimer
+                def handler():
+                    if not button._confirming:
+                        button.setText(f"Restore {button._orig_label}?")
+                        button.setStyleSheet(
+                            "QPushButton { background-color: #a04a2a; "
+                            "color: #ffe0c0; font-weight: bold; }")
+                        button._confirming = True
+                        QTimer.singleShot(3000, lambda: _revert(button))
+                    else:
+                        self._state.restore_instance_from_bin(iid)
+                return handler
+            def _revert(button):
+                # Guard against post-deleteLater calls
+                try:
+                    if button._confirming:
+                        button.setText(button._orig_label)
+                        button.setStyleSheet(
+                            "QPushButton { background-color: #471323; color: white; }")
+                        button._confirming = False
+                except RuntimeError:
+                    pass
+            btn.clicked.connect(_make_handler(btn, inst.instance_id))
             self._bin_layout.insertWidget(self._bin_layout.count() - 1, btn)
         # v3.4.6: update the collapsed-bin header text + color so the user
         # notices when something is in there even with the drawer collapsed.

@@ -1,5 +1,94 @@
 # DnD Manager Changelog
 
+## v3.9 — Passive foundations + UX round 1
+
+### Passive system widened
+- **Items now carry passives.** While an item sits in a character's
+  inventory, its passives apply to the owner (Charm of Vigor → +20
+  health_max, etc.). New `Item.passives` field; collect_active_passives
+  pulls them in.
+- **Weapons inflict passives on hit.** New `Weapon.inflict_passives`
+  field. When the wielder lands real damage in conflict resolution
+  (action == "attack" AND outgoing > 0), each entry is deep-copied
+  onto the victim's status list with `source = "weapon:<name>"`.
+  Example: Bleeding Sword inflicts "Bleed −5 health/turn for 3 turns".
+- **New `passive_sources()` helper** in math_engine groups every
+  active passive into four buckets: permanent, inflicted, equipment,
+  items — the source-of-truth the new grouped editor uses.
+- **Form multipliers already counted toward effective values
+  (v3.8.1).** Now combined with equipment + item + character passives
+  in one consistent pass.
+
+### C6 — Four-section passive editor on the character sheet
+- **Permanent & Inflicted** — editable list of character.passives,
+  with the existing duration field distinguishing the two.
+- **Equipment-derived** — read-only display of passives granted by
+  every equipped weapon/shield/armor piece/spell. Each row labels its
+  source.
+- **From Items** — read-only display of passives from inventory items.
+  Each row labels its source.
+
+### Weapon & item editors (Lists tab)
+- Weapon editor now has two passive sections: "Granted to wielder
+  while equipped" and "Inflicted on the target when this weapon hits"
+  (orange-tinted header for the inflict list — it visibly belongs to
+  a different layer).
+- Item editor gets a "Granted while in inventory" passive section.
+
+### A2 — Outcome row wraps narrow
+- The conflict outcome line (Dealt / Recv / SP / MP) breaks into two
+  lines when the side panel is narrower than 280 px: damage on top,
+  costs below.
+
+### A3 — Save-needed badge in title bar
+- The window title becomes `DnD Manager v3.9 — campaign.json *`
+  whenever the in-memory state diverges from the last saved blob.
+  Cleared by save_current / save_to.
+
+### A4 — Combat-numbers as two rows
+- The 8-chip strip is now two rows: offense (MAR/RNG/ARC/STH) on top,
+  defense (DEF/DOD) + Health loss (Health↓/Health↓sh) below. Stays
+  readable at narrow card widths.
+
+### A5 — Roster auto-sort
+- Roster rows sort alphabetically within their role section (Party,
+  Mob, NPC). Existing search filter applies first.
+
+### B5 — Arrow-key cycle on the participant card
+- With the compact character card focused, Left / Right arrow keys
+  cycle to the previous / next participant on that side — same as the
+  ◀ prev / next ▶ buttons.
+
+### B6 — Bin restore confirmation
+- Clicking a bin chip no longer restores instantly. First click swaps
+  the label to "Restore <name>?" and tints it amber; second click
+  actually restores. Auto-reverts after 3 s if you don't follow
+  through.
+
+### C3 — Action bar icon-only at narrow widths
+- When the side panel drops below 360 px, the segmented action bar
+  shows just `⚔ 🛡 🔮 ⚡ 🔄` with tooltips. Above that threshold the
+  labels return.
+
+### C4 — Save-As default filename
+- The Save-As dialog now defaults to `<campaign_name>.json` (with
+  unsafe characters stripped) instead of always `campaign.json`.
+
+### C5 — Encounter-tab keyboard shortcuts
+- `Ctrl+Tab` / `Ctrl+Shift+Tab` — cycle next / previous encounter.
+- `Ctrl+1` through `Ctrl+9` — jump directly to encounter N.
+- `Ctrl+W` — close current encounter (same End-Encounter confirm).
+
+### Deferred to v3.9 round 2
+- **A1** one-click side assignment from the roster.
+- **B1** sticky section nav on the global character sheet.
+- **B2** forms editor visual rewrite (bars per multiplier).
+- **B3** conflict-mode prominence inversion (effective vital larger
+  than raw).
+- **B4** status-effect per-turn preview ("loses 5/turn for 3 turns").
+- **C1** roll-history sparkline.
+- **C2** end-of-encounter summary dialog.
+
 ## v3.8.1 — Forms count toward effective values
 
 `effective_vitals` and `derive_proficiency_view` were using the

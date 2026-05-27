@@ -125,11 +125,22 @@ class WeaponsListTab(QWidget):
         form.addRow("Description:", self._desc_in)
         form_outer.addLayout(form)
 
-        pgrp = QGroupBox("Item Passives")
-        pgrp_l = QVBoxLayout(pgrp)
+        # v3.9: weapon now distinguishes passives GRANTED to the wielder
+        # while equipped, vs passives INFLICTED on whatever the weapon
+        # damages in a conflict (e.g. "bleed" applied on hit).
+        grant_grp = QGroupBox("Granted to wielder while equipped")
+        grant_l = QVBoxLayout(grant_grp)
         self._passive_editor = PassiveListEditor(source_default="weapon")
-        pgrp_l.addWidget(self._passive_editor)
-        form_outer.addWidget(pgrp)
+        grant_l.addWidget(self._passive_editor)
+        form_outer.addWidget(grant_grp)
+
+        inflict_grp = QGroupBox("Inflicted on the target when this weapon hits")
+        inflict_grp.setStyleSheet(
+            "QGroupBox { color: #f0aa6a; }")
+        inflict_l = QVBoxLayout(inflict_grp)
+        self._inflict_editor = PassiveListEditor(source_default="weapon_inflict")
+        inflict_l.addWidget(self._inflict_editor)
+        form_outer.addWidget(inflict_grp)
 
         apply_btn = QPushButton("Apply"); apply_btn.setProperty("role", "primary")
         apply_btn.clicked.connect(self._on_apply)
@@ -208,6 +219,11 @@ class WeaponsListTab(QWidget):
         self._slot_count_in.setValue(getattr(w, "slot_count", 1))
         self._desc_in.setPlainText(w.description)
         self._passive_editor.load(w.passives)
+        # v3.9: load inflicted-passive list too. Ensure the field exists
+        # on legacy weapons that were saved before the field existed.
+        if not hasattr(w, "inflict_passives") or w.inflict_passives is None:
+            w.inflict_passives = []
+        self._inflict_editor.load(w.inflict_passives)
 
     def _on_apply(self) -> None:
         if not self._current_id:
@@ -787,6 +803,14 @@ class ItemsListTab(QWidget):
         form.addRow("Stamina Effect:", self._stam_effect_in)
         form.addRow("Mana Effect:", self._mana_effect_in)
         form.addRow("Description:", self._desc_in)
+        # v3.9: items can carry passives. While the item is in the
+        # character's inventory, these passives apply to the owner.
+        from PyQt6.QtWidgets import QGroupBox as _QGB
+        pgrp = _QGB("Granted while in inventory")
+        pgrp_l = QVBoxLayout(pgrp)
+        self._item_passive_editor = PassiveListEditor(source_default="item")
+        pgrp_l.addWidget(self._item_passive_editor)
+        form.addRow(pgrp)
         form.addRow("", apply_btn)
 
         split.addWidget(detail)
@@ -848,6 +872,11 @@ class ItemsListTab(QWidget):
         self._stam_effect_in.setValue(getattr(it, "stamina_effect", 0))
         self._mana_effect_in.setValue(getattr(it, "mana_effect", 0))
         self._desc_in.setPlainText(it.description)
+        # v3.9: items now carry passives — ensure legacy items get a
+        # default empty list before binding the editor to them.
+        if not hasattr(it, "passives") or it.passives is None:
+            it.passives = []
+        self._item_passive_editor.load(it.passives)
 
     def _on_apply(self) -> None:
         if not self._current_id:
