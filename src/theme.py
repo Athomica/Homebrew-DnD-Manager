@@ -133,8 +133,13 @@ def build_stylesheet() -> str:
             border-radius: 4px;
             padding: 6px 14px;
         }}
+        /* v3.9.4: noticeable hover — the old 9-shade lift was nearly
+           invisible on dark themes. Cue both lighter background and a
+           lighter border so the button visibly "lifts." */
         QPushButton:hover {{
-            background-color: {c['bg_raised']};
+            background-color: #3a3a4a;
+            border: 1px solid #6a6a8a;
+            color: #ffffff;
         }}
         QPushButton:pressed {{
             background-color: {c['bg_base']};

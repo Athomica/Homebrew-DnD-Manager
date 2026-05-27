@@ -201,12 +201,14 @@ ARMOR_SLOTS = ("helmet", "chest", "gloves", "pants", "boots")
 
 
 def passive_affected_options() -> list[tuple[str, list[str]]]:
-    # v3.8: dice_bonus removed per user spec — only the raw proficiency
-    # SP and the throw result are user-facing things a passive can move.
-    # "Effective SP / Effective Throw" exist as derived views; they
-    # aren't separate dials a passive can target.
-    vitals = ["health", "health_max", "stamina", "stamina_max",
-              "mana", "mana_max"]
+    # v3.9.4: current vitals (health/stamina/mana) removed as static
+    # affect targets — modifying them statically is just "set the
+    # current value", which is editable directly on the vital bar.
+    # Passives only move the MAX of a vital (which then implies the
+    # effective cap follows). For DoT/HoT effects, use a passive that
+    # targets the max + flip tick_per_turn (the per-turn forecast still
+    # ticks the current vital each round).
+    vitals = ["health_max", "stamina_max", "mana_max"]
     prof_attrs = ("throw", "sp")
     profs: list[str] = []
     for p in PROFICIENCIES:

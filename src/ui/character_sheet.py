@@ -1018,54 +1018,185 @@ class CharacterSheet(QWidget):
     # ------------------------------------------------------------------
     # Forms
     # ------------------------------------------------------------------
+    # v3.9.4: full overhaul of the Forms section. The old 15-column
+    # QTableWidget was unreadable (raw `1.2` text per cell). The new
+    # layout is master-detail:
+    #
+    #   ┌─ Forms (list) ─┐   ┌─ Selected form (detail) ─────────────┐
+    #   │ • Human ACTIVE │   │ Name [Wolf]    [Enter This Form] ❗  │
+    #   │   Wolf         │   │ Mana to enter [100]  Maintain […]     │
+    #   │   Bear         │   │                                       │
+    #   │                │   │ Proficiency multipliers (1.0× = base) │
+    #   │                │   │  Armor      [—————●——] 1.00×          │
+    #   │                │   │  Martial    [———————●] 2.00× (green)  │
+    #   │                │   │  ...                                  │
+    #   │                │   │ Vital multipliers                     │
+    #   │                │   │  Health     [——————●—] 1.50× (green)  │
+    #   │                │   │  Stamina    [—●—————] 0.80× (red)     │
+    #   │                │   │  Mana       [—————●——] 1.00×          │
+    #   │                │   │ Misc                                  │
+    #   │                │   │  Inv override / Restrictions / Notes  │
+    #   │ + Add  − Remove│   │                                       │
+    #   └────────────────┘   └───────────────────────────────────────┘
     def _build_forms_section(self) -> QWidget:
+        from PyQt6.QtWidgets import (
+            QSplitter, QListWidget as _QListWidget, QListWidgetItem as _QLWI,
+            QSlider as _QSlider, QFormLayout as _QForm,
+        )
         wrap = QWidget()
         outer = QVBoxLayout(wrap)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(10)
+        outer.setSpacing(8)
 
-        top = QHBoxLayout()
-        top.setSpacing(12)
+        # Top: shapeshifter toggle is still the master switch.
+        top = QHBoxLayout(); top.setSpacing(12)
         self._shifter_chk = QCheckBox("Shapeshifter")
         self._shifter_chk.setChecked(self._char.is_shapeshifter)
         self._shifter_chk.toggled.connect(self._on_toggle_shifter)
         top.addWidget(self._shifter_chk)
-
-        top.addSpacing(20)
-        top.addWidget(QLabel("Active Form:"))
-        self._active_form_combo = NoWheelComboBox()
-        self._active_form_combo.currentIndexChanged.connect(self._on_active_form_changed)
-        top.addWidget(self._active_form_combo, 1)
-        self._enter_form_btn = QPushButton("Enter Form (pay mana)")
-        self._enter_form_btn.setProperty("role", "primary")
-        self._enter_form_btn.clicked.connect(self._on_enter_form)
-        top.addWidget(self._enter_form_btn)
+        top.addStretch(1)
         outer.addLayout(top)
 
-        # v3.4: forms display multipliers as percentages (100% = no change)
-        # and gain three vital columns (HP / Stamina / Mana). All multiplier
-        # cells accept either "120%" or "1.2" on input.
-        self._forms_table = QTableWidget(0, 15)
-        self._forms_table.setHorizontalHeaderLabels([
-            "Name", "Armor %", "Martial %", "Ranged %", "Stealth %",
-            "Arcana %", "Perc %", "Acro %", "Lock %", "Speech %", "Luck %",
-            "Health %", "Stam %", "Mana %", "Inv max",
-        ])
-        self._forms_table.verticalHeader().setVisible(False)
-        self._forms_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Interactive)
-        self._forms_table.itemChanged.connect(self._on_form_cell_changed)
-        # v3.9.2 (B2): paint a per-cell bar visualization for the
-        # multiplier columns so users can scan buffs/debuffs visually.
-        # Column 0 (Name) and column 14 (Inv max) get the default
-        # delegate.
-        from ui.components.multiplier_delegate import MultiplierBarDelegate
-        self._mult_delegate = MultiplierBarDelegate(self._forms_table)
-        for col in range(1, 14):
-            self._forms_table.setItemDelegateForColumn(col, self._mult_delegate)
-        # Raise the row height a touch to leave room for the bar.
-        self._forms_table.verticalHeader().setDefaultSectionSize(32)
-        outer.addWidget(Resizable(self._forms_table, initial_height=260))
+        # Master-detail splitter.
+        split = QSplitter()
+        split.setOrientation(Qt.Orientation.Horizontal)
+
+        # LEFT: form list + add/remove.
+        left = QWidget(); left_v = QVBoxLayout(left)
+        left_v.setContentsMargins(0, 0, 0, 0); left_v.setSpacing(6)
+        self._forms_list = _QListWidget()
+        self._forms_list.currentRowChanged.connect(self._on_form_row_changed)
+        left_v.addWidget(self._forms_list, 1)
+        lb = QHBoxLayout()
+        add_btn = QPushButton("+ Add"); add_btn.setProperty("role", "primary")
+        add_btn.clicked.connect(self._on_add_form)
+        rm_btn = QPushButton("− Remove"); rm_btn.setProperty("role", "danger")
+        rm_btn.clicked.connect(self._on_remove_form)
+        lb.addWidget(add_btn); lb.addWidget(rm_btn); lb.addStretch(1)
+        left_v.addLayout(lb)
+        split.addWidget(left)
+
+        # RIGHT: form detail editor.
+        right = QWidget(); right_v = QVBoxLayout(right)
+        right_v.setContentsMargins(8, 0, 0, 0); right_v.setSpacing(8)
+
+        head_row = QHBoxLayout(); head_row.setSpacing(8)
+        self._form_name_in = QLineEdit()
+        self._form_name_in.editingFinished.connect(self._on_form_name_edited)
+        head_row.addWidget(QLabel("Name:"))
+        head_row.addWidget(self._form_name_in, 1)
+        self._form_active_lbl = QLabel("")
+        self._form_active_lbl.setStyleSheet(
+            "background:#2d5a3d; color:#d8f0d8; padding:2px 8px; "
+            "border-radius:4px; font-weight:bold;")
+        self._form_active_lbl.setVisible(False)
+        head_row.addWidget(self._form_active_lbl)
+        self._enter_form_btn = QPushButton("▶ Enter This Form")
+        self._enter_form_btn.setProperty("role", "primary")
+        self._enter_form_btn.setToolTip(
+            "Pay the mana cost and shift into the selected form.")
+        self._enter_form_btn.clicked.connect(self._on_enter_selected_form)
+        head_row.addWidget(self._enter_form_btn)
+        right_v.addLayout(head_row)
+
+        cost_row = _QForm()
+        self._form_mana_to_enter_in = NoWheelDoubleSpinBox()
+        _no_track_spin(self._form_mana_to_enter_in)
+        self._form_mana_to_enter_in.setRange(0, 99999)
+        self._form_mana_to_enter_in.setDecimals(0)
+        self._form_mana_to_enter_in.valueChanged.connect(
+            self._on_form_field_changed)
+        self._form_maintain_in = QLineEdit()
+        self._form_maintain_in.editingFinished.connect(self._on_form_field_changed)
+        cost_row.addRow("Mana to enter:", self._form_mana_to_enter_in)
+        cost_row.addRow("Maintain cost:", self._form_maintain_in)
+        right_v.addLayout(cost_row)
+
+        # Multipliers — proficiencies, then vitals.
+        self._form_mult_widgets: dict[str, tuple[_QSlider, NoWheelDoubleSpinBox]] = {}
+
+        def _add_mult_row(layout: _QForm, label_text: str, attr: str) -> None:
+            row = QWidget(); rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(6)
+            sl = _QSlider(Qt.Orientation.Horizontal)
+            sl.setMinimum(0); sl.setMaximum(300)  # 0..3.00×, step 0.01×
+            sl.setSingleStep(5)
+            sl.setPageStep(10)
+            sb = NoWheelDoubleSpinBox(); _no_track_spin(sb)
+            sb.setRange(0.0, 3.0); sb.setDecimals(2); sb.setSingleStep(0.05)
+            sb.setSuffix("×")
+            sb.setFixedWidth(80)
+            # Two-way sync between slider and spinbox.
+            def _from_slider(v, attr=attr, sb=sb):
+                sb.blockSignals(True); sb.setValue(v / 100.0); sb.blockSignals(False)
+                self._on_form_mult_changed(attr, v / 100.0)
+            def _from_sb(v, attr=attr, sl=sl):
+                sl.blockSignals(True); sl.setValue(int(round(v * 100))); sl.blockSignals(False)
+                self._on_form_mult_changed(attr, v)
+            sl.valueChanged.connect(_from_slider)
+            sb.valueChanged.connect(_from_sb)
+            rl.addWidget(sl, 1)
+            rl.addWidget(sb)
+            self._form_mult_widgets[attr] = (sl, sb)
+            layout.addRow(label_text, row)
+
+        prof_grp = QGroupBox("Proficiency multipliers")
+        pf = _QForm(prof_grp)
+        for label, attr in (
+            ("Armor", "armor_mult"), ("Martial", "martial_mult"),
+            ("Ranged", "ranged_mult"), ("Stealth", "stealth_mult"),
+            ("Arcana", "arcana_mult"), ("Perception", "perception_mult"),
+            ("Acrobatics", "acrobatics_mult"), ("Lockpicking", "lockpicking_mult"),
+            ("Speech", "speech_mult"), ("Luck", "luck_mult"),
+        ):
+            _add_mult_row(pf, label, attr)
+        right_v.addWidget(prof_grp)
+
+        vit_grp = QGroupBox("Vital multipliers")
+        vf = _QForm(vit_grp)
+        for label, attr in (
+            ("Health", "health_mult"), ("Stamina", "stamina_mult"),
+            ("Mana", "mana_mult"),
+        ):
+            _add_mult_row(vf, label, attr)
+        right_v.addWidget(vit_grp)
+
+        misc_grp = QGroupBox("Misc")
+        mf = _QForm(misc_grp)
+        self._form_inv_override_in = QLineEdit()
+        self._form_inv_override_in.setPlaceholderText(
+            "Leave empty to inherit base inventory slots")
+        self._form_inv_override_in.editingFinished.connect(
+            self._on_form_field_changed)
+        self._form_restrictions_in = QLineEdit()
+        self._form_restrictions_in.editingFinished.connect(
+            self._on_form_field_changed)
+        self._form_notes_in = QLineEdit()
+        self._form_notes_in.editingFinished.connect(self._on_form_field_changed)
+        mf.addRow("Inv. slot override:", self._form_inv_override_in)
+        mf.addRow("Restrictions:", self._form_restrictions_in)
+        mf.addRow("Notes:", self._form_notes_in)
+        right_v.addWidget(misc_grp)
+
+        right_v.addStretch(1)
+        # Wrap right side in a scroll area — many multipliers can grow tall.
+        from PyQt6.QtWidgets import QScrollArea as _QSA
+        right_scroll = _QSA(); right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setWidget(right)
+        split.addWidget(right_scroll)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 3)
+
+        outer.addWidget(Resizable(split, initial_height=380))
+
+        # Provide the legacy attribute the rest of the code reads from.
+        # (Some callers still reference _active_form_combo for sync.)
+        # Build a hidden combo we keep up to date.
+        self._active_form_combo = NoWheelComboBox()
+        self._active_form_combo.setVisible(False)
+        outer.addWidget(self._active_form_combo)
+        return wrap
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
@@ -1080,6 +1211,107 @@ class CharacterSheet(QWidget):
         btn_row.addStretch(1)
         outer.addLayout(btn_row)
         return wrap
+
+    # v3.9.4: new Form section handlers.
+    def _on_form_row_changed(self, row: int) -> None:
+        if self._suspend:
+            return
+        # Selection in the list -> push that form's fields into the
+        # detail panel. Blocks signals on every editor so the load
+        # doesn't fire change handlers.
+        if row < 0 or row >= len(self._char.forms):
+            return
+        f = self._char.forms[row]
+        editors = [
+            self._form_name_in, self._form_mana_to_enter_in,
+            self._form_maintain_in, self._form_inv_override_in,
+            self._form_restrictions_in, self._form_notes_in,
+        ]
+        sliders_spins: list = []
+        for sl, sb in self._form_mult_widgets.values():
+            sliders_spins.append(sl); sliders_spins.append(sb)
+        for w in editors + sliders_spins:
+            w.blockSignals(True)
+        try:
+            self._form_name_in.setText(f.name)
+            self._form_mana_to_enter_in.setValue(f.mana_to_enter or 0)
+            self._form_maintain_in.setText(f.maintain_cost or "")
+            self._form_inv_override_in.setText(
+                "" if f.inventory_slot_override is None
+                else str(f.inventory_slot_override))
+            self._form_restrictions_in.setText(f.restrictions or "")
+            self._form_notes_in.setText(f.notes or "")
+            for attr, (sl, sb) in self._form_mult_widgets.items():
+                v = float(getattr(f, attr, 1.0) or 1.0)
+                sl.setValue(int(round(v * 100)))
+                sb.setValue(v)
+        finally:
+            for w in editors + sliders_spins:
+                w.blockSignals(False)
+        # Active badge / Enter button enable state.
+        is_active = (self._char.active_form_id == f.id)
+        self._form_active_lbl.setVisible(is_active)
+        self._form_active_lbl.setText("● ACTIVE")
+        self._enter_form_btn.setEnabled(not is_active)
+        self._enter_form_btn.setText(
+            "Already in this form" if is_active else "▶ Enter This Form")
+
+    def _selected_form(self):
+        row = self._forms_list.currentRow() if hasattr(self, "_forms_list") else -1
+        if row < 0 or row >= len(self._char.forms):
+            return None
+        return self._char.forms[row]
+
+    def _on_form_name_edited(self) -> None:
+        if self._suspend:
+            return
+        f = self._selected_form()
+        if f is None:
+            return
+        new_name = self._form_name_in.text().strip() or f.name
+        if f.name != new_name:
+            f.name = new_name
+            self._refresh_forms()
+            self._refresh_derived()
+
+    def _on_form_field_changed(self, *_args) -> None:
+        if self._suspend:
+            return
+        f = self._selected_form()
+        if f is None:
+            return
+        f.mana_to_enter = float(self._form_mana_to_enter_in.value() or 0)
+        f.maintain_cost = self._form_maintain_in.text().strip() or "-"
+        inv = self._form_inv_override_in.text().strip()
+        try:
+            f.inventory_slot_override = int(inv) if inv else None
+        except ValueError:
+            f.inventory_slot_override = None
+        f.restrictions = self._form_restrictions_in.text().strip()
+        f.notes = self._form_notes_in.text().strip()
+        self._state.character_changed.emit(self._char.id)
+
+    def _on_form_mult_changed(self, attr: str, value: float) -> None:
+        if self._suspend:
+            return
+        f = self._selected_form()
+        if f is None:
+            return
+        setattr(f, attr, value)
+        # Broadcast so Effective columns + vital labels update live.
+        self._state.character_changed.emit(self._char.id)
+
+    def _on_enter_selected_form(self) -> None:
+        f = self._selected_form()
+        if f is None:
+            return
+        ok, msg = self._state.set_active_form(self._char, f.id, pay_mana=True)
+        if not ok:
+            QMessageBox.warning(self, "Shapeshift", msg)
+        else:
+            self.statusBar() if False else None  # no statusbar here
+        self._refresh_forms()
+        self._refresh_derived()
 
     def _on_toggle_shifter(self, checked: bool) -> None:
         self._set_field("is_shapeshifter", checked)
@@ -1118,14 +1350,13 @@ class CharacterSheet(QWidget):
         self._refresh_forms()
 
     def _on_remove_form(self) -> None:
-        row = self._forms_table.currentRow()
+        # v3.9.4: list-based selection now.
+        row = self._forms_list.currentRow()
         if row < 0 or row >= len(self._char.forms):
             return
         fid = self._char.forms[row].id
         del self._char.forms[row]
         if self._char.active_form_id == fid:
-            # v3.4.5: don't charge mana for the auto-revert when a form is
-            # deleted out from under the character.
             self._state.set_active_form(
                 self._char,
                 self._char.forms[0].id if self._char.forms else None,
@@ -1134,34 +1365,8 @@ class CharacterSheet(QWidget):
         self._refresh_forms()
         self._refresh_derived()
 
-    def _on_form_cell_changed(self, item: QTableWidgetItem) -> None:
-        if self._suspend:
-            return
-        row, col = item.row(), item.column()
-        if row < 0 or row >= len(self._char.forms):
-            return
-        f = self._char.forms[row]
-        text = item.text().strip()
-        try:
-            if col == 0:
-                f.name = text
-            elif col == 14:
-                f.inventory_slot_override = int(text) if text else None
-            else:
-                # v3.4: 10 proficiency mults (cols 1..10) + 3 vital mults (11..13)
-                mults = ["armor_mult", "martial_mult", "ranged_mult", "stealth_mult",
-                         "arcana_mult", "perception_mult", "acrobatics_mult",
-                         "lockpicking_mult", "speech_mult", "luck_mult",
-                         "health_mult", "stamina_mult", "mana_mult"]
-                # Accept "120%" or "1.2"
-                txt = text.rstrip("%").strip()
-                val = float(txt) if txt else 1.0
-                if text.endswith("%") or val > 5:
-                    val = val / 100.0
-                setattr(f, mults[col - 1], val)
-        except (ValueError, IndexError):
-            pass
-        self._refresh_derived()
+    # v3.9.4: _on_form_cell_changed is gone with the QTableWidget. All
+    # form edits now flow through dedicated per-field handlers above.
 
     # ------------------------------------------------------------------
     # NPC section
@@ -1561,6 +1766,7 @@ class CharacterSheet(QWidget):
         self._suspend = True
         try:
             self._shifter_chk.setChecked(self._char.is_shapeshifter)
+            # Legacy hidden combo, still kept in sync for any external readers.
             self._active_form_combo.clear()
             self._active_form_combo.addItem("(none)", None)
             for f in self._char.forms:
@@ -1570,25 +1776,20 @@ class CharacterSheet(QWidget):
                     if self._active_form_combo.itemData(i) == self._char.active_form_id:
                         self._active_form_combo.setCurrentIndex(i)
                         break
-
-            self._forms_table.setRowCount(0)
+            # v3.9.4: master list + detail panel.
+            prev_row = self._forms_list.currentRow()
+            self._forms_list.blockSignals(True)
+            self._forms_list.clear()
             for f in self._char.forms:
-                r = self._forms_table.rowCount()
-                self._forms_table.insertRow(r)
-                self._forms_table.setItem(r, 0, QTableWidgetItem(f.name))
-                # v3.4: 10 prof mults + 3 vital mults, shown as percentages.
-                mults = [f.armor_mult, f.martial_mult, f.ranged_mult, f.stealth_mult,
-                         f.arcana_mult, f.perception_mult, f.acrobatics_mult,
-                         f.lockpicking_mult, f.speech_mult, f.luck_mult,
-                         getattr(f, "health_mult", 1.0),
-                         getattr(f, "stamina_mult", 1.0),
-                         getattr(f, "mana_mult", 1.0)]
-                for i, m in enumerate(mults, start=1):
-                    self._forms_table.setItem(
-                        r, i, QTableWidgetItem(f"{int(round(m * 100))}%"))
-                inv = ("" if f.inventory_slot_override is None
-                       else str(f.inventory_slot_override))
-                self._forms_table.setItem(r, 14, QTableWidgetItem(inv))
+                is_active = (f.id == self._char.active_form_id)
+                label = f"● {f.name}  [ACTIVE]" if is_active else f"   {f.name}"
+                self._forms_list.addItem(label)
+            if self._char.forms:
+                row = max(0, min(prev_row, len(self._char.forms) - 1))
+                self._forms_list.setCurrentRow(row)
+            self._forms_list.blockSignals(False)
+            if self._char.forms:
+                self._on_form_row_changed(self._forms_list.currentRow())
         finally:
             self._suspend = False
 

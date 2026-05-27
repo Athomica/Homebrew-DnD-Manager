@@ -1,5 +1,60 @@
 # DnD Manager Changelog
 
+## v3.9.4 — Forms overhaul + encounter restructure + cap fixes
+
+### Passive affect dropdown — only max vitals
+Current vitals (`health`, `stamina`, `mana`) are no longer separate
+options. Static passives only target the MAX of a vital (and the
+effective cap follows). For DoT / HoT effects, target the matching
+`_max` and tick the `per turn` checkbox — `per_turn_forecast` matches
+both the current vital and its `_max` partner.
+
+### Health cap, redone properly
+The previous fix updated `set_effective`'s cap but `_refresh_bar` kept
+clamping current to the RAW max spinbox value. So equipping a
+chestplate with +50 health_max bumped the cap briefly, then snapped
+back to 100 on the next signal. v3.9.4 stashes the effective max in
+`_eff_max_clamp` and uses it for both the spinbox cap AND the
+progress-bar maximum. Equip → current can heal to 150; unequip →
+back to 100.
+
+### Encounter tabs restructured
+- Tabs are **always** `Status / Gear / Passives` in the encounter
+  view (no more Now / Sheet labels in prep mode).
+- During a conflict, **Gear is hidden entirely**. The only mid-fight
+  gear action — primary ⇄ secondary swap — is grafted onto the
+  Status tab as a compact one-line control.
+- `_refresh_equipment_view` / `_refresh_inventory_view` no-op when
+  their widgets aren't built (no AttributeError mid-conflict).
+
+### Button hover styling
+The theme's hover was a 9-shade lift on a near-black button — nearly
+invisible. v3.9.4 makes hover a noticeable bg + border + text-color
+shift so every plain QPushButton (Use Item, Equip Weapon, etc.)
+visibly reacts to the cursor.
+
+### Forms section — full UX overhaul
+The 15-column QTableWidget is gone. Replaced by a master-detail
+layout:
+
+- **Left**: form list with active-form marker (`● Wolf [ACTIVE]`).
+- **Right**: detail editor for the selected form.
+  - Name input, mana-to-enter, maintain cost.
+  - **`▶ Enter This Form` button** at the top — pays mana, activates.
+    Disables and re-labels to "Already in this form" when the
+    selected form is already active.
+  - **Proficiency multipliers** grouped, each as `slider +
+    numeric spinbox` synced two-way (0.00×..3.00×).
+  - **Vital multipliers** in their own group.
+  - **Misc**: inventory override / restrictions / notes.
+- Multiplier slider + spinbox sync on every change → broadcasts
+  through `state.character_changed` → live update to Effective
+  columns / vital labels everywhere.
+
+### Sparkline removed
+The dice-roll bar chart didn't have an obvious meaning at a glance.
+The text log already shows the recent rolls.
+
 ## v3.9.3 — Three passive bugs
 
 ### Effective SP column was invisible

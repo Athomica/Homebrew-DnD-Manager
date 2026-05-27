@@ -454,26 +454,30 @@ def passive_sources(character: Character,
 
 def per_turn_forecast(character: Character, vital: str,
                        passives: list) -> tuple[float, list]:
-    """v3.9.2 (B4): forecast the per-turn delta on a current vital
-    from any active passives flagged tick_per_turn that target this
-    vital. Fixed passives add their `amount` per turn; percent
-    passives apply against the CURRENT effective value of the vital
-    (so a 5% bleed on a 200/200 character is -10/turn).
+    """v3.9.2 (B4) / v3.9.4: forecast the per-turn delta on a current
+    vital from any active passives flagged `tick_per_turn`.
 
-    Returns (total_delta_per_turn, ticking_passives) where each
-    entry of the list is the originating Passive.
+    Static-only affect targets (v3.9.4) are now the max-vitals
+    (`health_max`, `stamina_max`, `mana_max`) — current vitals were
+    removed because editing the current value is a direct vital-bar
+    operation, not a passive. For DoT/HoT effects, tick_per_turn=True
+    on a `_max` target means "tick the CURRENT value of that vital by
+    `amount` each turn". A Bleed -5 health_max + tick_per_turn=True
+    drains 5 current health each round; a +3 stamina_max + tick
+    regenerates 3 current stamina.
     """
     ticking = []
-    base = float(getattr(character, f"{vital}_current", 0) or 0)
+    cur_base = float(getattr(character, f"{vital}_current", 0) or 0)
     delta = 0.0
+    target_keys = (vital, f"{vital}_max")
     for p in passives:
         if not getattr(p, "tick_per_turn", False):
             continue
-        if getattr(p, "affected_value", None) != vital:
+        if getattr(p, "affected_value", None) not in target_keys:
             continue
         amount = float(getattr(p, "amount", 0.0) or 0.0)
         if getattr(p, "scope", "fixed") == "percent":
-            delta += base * (amount / 100.0)
+            delta += cur_base * (amount / 100.0)
         else:
             delta += amount
         ticking.append(p)

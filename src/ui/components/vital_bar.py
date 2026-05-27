@@ -166,6 +166,11 @@ class VitalBar(QWidget):
         # Cap the current spinbox at the EFFECTIVE max — what the user
         # can actually heal up to right now.
         self._current_input.setMaximum(eff_max_i)
+        # v3.9.4: stash effective max so _refresh_bar (driven by raw
+        # spinbox edits) also respects it when clamping current.
+        self._eff_max_clamp = eff_max_i
+        # Re-fill the bar so it visually reflects the effective max.
+        self._bar.setMaximum(eff_max_i)
         # Cache so set_conflict_mode can re-render without recomputing.
         self._last_eff = (eff_current, eff_max, cur_delta, max_delta)
         in_conflict = getattr(self, "_in_conflict", False)
@@ -203,20 +208,25 @@ class VitalBar(QWidget):
     def _refresh_bar(self, *_args, animate: bool = True,
                      prev_value: int | None = None) -> None:
         cur = self._current_input.value()
-        mx = max(1, self._max_input.value())
-        # v3.8: keep the current spinbox's hard cap in sync with the
-        # currently-typed max. Without this, typing a new max in the
-        # spinbox leaves the old (often 100) cap in place and the
-        # current value can't follow. set_effective() may later raise
-        # the cap further to account for passive buffs.
-        if self._current_input.maximum() < mx:
-            self._current_input.setMaximum(mx)
-        if cur > mx:
-            cur = mx
+        raw_mx = max(1, self._max_input.value())
+        # v3.9.4: the current value's ceiling is the EFFECTIVE max,
+        # not the raw spinbox max. If a passive adds +50 health_max
+        # to a base-100 character, the player can heal up to 150 even
+        # though the editable max field shows 100. Previously the
+        # clamp pinned current to the raw max — equipping a chestplate
+        # that bumped max wouldn't let the current value follow.
+        eff_mx = getattr(self, "_eff_max_clamp", raw_mx)
+        cap_mx = max(raw_mx, int(round(eff_mx)))
+        if self._current_input.maximum() < cap_mx:
+            self._current_input.setMaximum(cap_mx)
+        if cur > cap_mx:
+            cur = cap_mx
             self._current_input.blockSignals(True)
-            self._current_input.setValue(mx)
+            self._current_input.setValue(cap_mx)
             self._current_input.blockSignals(False)
-        self._bar.setMaximum(mx)
+        # Bar progress fills the EFFECTIVE max — so a buffed character
+        # visibly fills past the raw 100 line.
+        self._bar.setMaximum(cap_mx)
         if animate and prev_value is not None and prev_value != cur:
             self._anim.stop()
             self._anim.setStartValue(prev_value)
@@ -225,7 +235,7 @@ class VitalBar(QWidget):
         else:
             self._bar.setValue(cur)
 
-        ratio = cur / mx if mx else 0
+        ratio = cur / cap_mx if cap_mx else 0
         if cur <= 0:
             self._status.setText("DOWN")
             self._status.setProperty("role", "vital_low")

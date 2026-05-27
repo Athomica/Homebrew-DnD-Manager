@@ -171,12 +171,9 @@ class CompactCharacterCard(QFrame):
         self._dice_log.setProperty("role", "dim")
         self._dice_log.setMinimumWidth(100)
         dl.addWidget(self._dice_log)
-        # v3.9.1 (C1): sparkline visualizing the last N rolls. Recent
-        # rolls in blue, older in dim slate, max-face (critical) in red.
-        from ui.components.dice_sparkline import DiceSparkline
-        self._dice_spark = DiceSparkline(max_face=instance.character.dice)
-        self._dice_spark.setMinimumWidth(80)
-        dl.addWidget(self._dice_spark)
+        # v3.9.4: sparkline removed — the meaning wasn't obvious from
+        # the visual and the text log already conveys the recent
+        # rolls.
         dl.addStretch(1)
         outer.addWidget(self._dice_frame)
         # Apply the initial (compact) styling.
@@ -192,8 +189,12 @@ class CompactCharacterCard(QFrame):
         # actually read during combat, "Gear" for equipment + inventory,
         # "Sheet" for slower edits (stats, passives, forms).
         combat = self._build_combat_tab()
-        equipment = self._build_equipment_tab()
-        inventory = self._build_inventory_tab()
+        # v3.9.4: equipment + inventory only built when out of conflict.
+        # During a conflict the Gear tab is hidden entirely — the only
+        # useful gear control mid-fight is primary/secondary swap, and
+        # that's grafted onto the Status (combat) tab below.
+        equipment = None if self._in_conflict else self._build_equipment_tab()
+        inventory = None if self._in_conflict else self._build_inventory_tab()
         # v3.7: Stats section (battle statistics — KP/solo_kp/SP earned)
         # is suppressed during conflict mode. It's not actionable while
         # actions are being picked, just visual noise.
@@ -203,8 +204,6 @@ class CompactCharacterCard(QFrame):
                   if (instance.character.is_shapeshifter
                       or instance.character.forms) else None)
 
-        gear = self._make_grouped_tab(
-            [("⚔  Equipment", equipment), ("🎒  Inventory", inventory)])
         sheet_sections = []
         if stats is not None:
             sheet_sections.append(("📊  Battle Statistics", stats))
@@ -213,14 +212,17 @@ class CompactCharacterCard(QFrame):
             sheet_sections.append(("🐺  Forms", forms))
         sheet = self._make_grouped_tab(sheet_sections)
 
-        # v3.9.2: in-conflict tab labels swap to reflect what each tab
-        # is actually for during a conflict — vital status to monitor,
-        # passives that are ticking.
-        now_label = "Status" if self._in_conflict else "Now"
-        sheet_label = "Passives" if self._in_conflict else "Sheet"
-        self._tabs.addTab(combat, now_label)
-        self._tabs.addTab(gear, "Gear")
-        self._tabs.addTab(sheet, sheet_label)
+        # v3.9.4: tabs are always Status / Gear / Passives in the
+        # encounter view (the old Now / Sheet labels are gone). During
+        # a conflict, Gear is hidden because the only mid-fight
+        # actionable gear is primary/secondary swap — that's already
+        # rendered at the top of Status by _build_combat_tab.
+        self._tabs.addTab(combat, "Status")
+        if not self._in_conflict:
+            gear = self._make_grouped_tab(
+                [("⚔  Equipment", equipment), ("🎒  Inventory", inventory)])
+            self._tabs.addTab(gear, "Gear")
+        self._tabs.addTab(sheet, "Passives")
 
         # v3.4: listen to character_changed and lists_changed too, so things
         # like fall damage, spell lists, and equipment swaps reflect in real
@@ -360,6 +362,25 @@ class CompactCharacterCard(QFrame):
         v = QVBoxLayout(tab)
         v.setContentsMargins(6, 8, 6, 6)
         v.setSpacing(8)
+
+        # v3.9.4: in conflict, the Gear tab disappears and the only
+        # mid-fight gear action — swap between primary and secondary
+        # weapon — surfaces here as a compact one-line control.
+        if self._in_conflict:
+            swap_row = QHBoxLayout()
+            swap_row.setSpacing(8)
+            self._using_primary_chk = QCheckBox("Using primary")
+            self._using_primary_chk.setChecked(
+                self._instance.character.using_primary)
+            self._using_primary_chk.toggled.connect(
+                lambda val: self._set_field("using_primary", val))
+            swap_row.addWidget(self._using_primary_chk)
+            self._swap_btn = QPushButton("⇄ Swap")
+            self._swap_btn.setToolTip("Swap primary ⇄ secondary weapon")
+            self._swap_btn.clicked.connect(self._on_swap_primary_secondary)
+            swap_row.addWidget(self._swap_btn)
+            swap_row.addStretch(1)
+            v.addLayout(swap_row)
 
         # Vitals
         self._hp_bar = VitalBar("Health", "hp")
@@ -804,6 +825,9 @@ class CompactCharacterCard(QFrame):
         combo.blockSignals(False)
 
     def _refresh_inventory_view(self) -> None:
+        # v3.9.4: inventory tab is not built in conflict; skip refresh.
+        if not hasattr(self, "_inv_list"):
+            return
         char = self._instance.character
         self._inv_list.clear()
         items_by_id = {i.id: i for i in self._state.state.items}
@@ -839,6 +863,17 @@ class CompactCharacterCard(QFrame):
         self._add_item_combo.blockSignals(False)
 
     def _refresh_equipment_view(self) -> None:
+        # v3.9.4: equipment tab is not built in conflict; skip refresh.
+        if not hasattr(self, "_primary_combo"):
+            # The using_primary checkbox may live on the Status tab
+            # instead — sync it there if present.
+            char = self._instance.character
+            if hasattr(self, "_using_primary_chk"):
+                if self._using_primary_chk.isChecked() != char.using_primary:
+                    self._using_primary_chk.blockSignals(True)
+                    self._using_primary_chk.setChecked(char.using_primary)
+                    self._using_primary_chk.blockSignals(False)
+            return
         char = self._instance.character
         wlist = [(f"{('[S] ' if w.is_shield else ('[*] ' if w.is_staff else '[W] '))}{w.name}",
                   w.id) for w in self._state.state.weapons]
@@ -1050,13 +1085,6 @@ class CompactCharacterCard(QFrame):
             else:
                 parts.append(f"<b>{d}</b>")
         self._dice_log.setText("  ".join(parts) if parts else "(no rolls yet)")
-        # v3.9.1 (C1): keep the sparkline in sync. dice_history is
-        # already newest-first in the model — reverse so the sparkline
-        # reads left-to-right (oldest → newest).
-        if hasattr(self, "_dice_spark"):
-            self._dice_spark.set_values(
-                list(reversed(self._instance.dice_history)),
-                max_face=c.dice)
         try:
             can_up, _ = self._state.can_change_turn(self._instance.instance_id, +1)
             can_dn, _ = self._state.can_change_turn(self._instance.instance_id, -1)
