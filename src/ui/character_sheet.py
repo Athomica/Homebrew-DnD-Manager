@@ -406,12 +406,6 @@ class CharacterSheet(QWidget):
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
 
-        # Hidden helpers that the rest of refresh() still pokes at.
-        self._coord_label = QLabel("0.0")
-        self._coord_row_label = QLabel("Coordination:")
-        self._vital_calc_label = QLabel("")
-        self._sp_earned_label = QLabel("0")  # unused; written but not shown
-
         unalloc_row = QHBoxLayout()
         unalloc_row.setSpacing(10)
         self._unalloc_label = QLabel("0")
@@ -1254,12 +1248,6 @@ class CharacterSheet(QWidget):
         self._level_label.setText(f"Level: {lvl}")
         self._total_sp_label.setText(f"Total SP: {total_sp}")
 
-        # Battle stats (computed)
-        coord = me.coordination(self._char.kill_points, self._char.participants)
-        sp_earn = me.sp_earned(self._char.solo_kp, self._char.kill_points,
-                               self._char.participants, lvl)
-        self._coord_label.setText(f"{coord:.1f}")
-        self._sp_earned_label.setText(f"{sp_earn:.1f}")
         # v3.7.2: round to whole SP (the user's request — no decimals).
         self._unalloc_label.setText(str(int(self._char.unallocated_sp)))
 
@@ -1273,18 +1261,6 @@ class CharacterSheet(QWidget):
             f"(maxATK={rec['max_atk']:.1f}, DEF={rec['def_value']:.1f}) "
             f"× mult={rec['global_mult']:.2f} = {rec['total']}"
         )
-        if sp_earn > 0:
-            gain = me.vital_max_gain_from_sp(total_sp, sp_earn)
-            if gain > 0:
-                self._vital_calc_label.setText(
-                    f"If you spend the {sp_earn:.1f} earned SP, your Vital Max increases by {gain}."
-                )
-            else:
-                self._vital_calc_label.setText(
-                    f"Spending the {sp_earn:.1f} earned SP would not change your Vital Max."
-                )
-        else:
-            self._vital_calc_label.setText("")
 
         # Proficiency view
         profs = me.derive_proficiency_view(self._char)
@@ -1523,8 +1499,6 @@ class CharacterSheet(QWidget):
         is_dev = self._state.state.developer_view
         self._total_sp_label.setVisible(is_dev)
         self._prof_table.setColumnHidden(2, not is_dev)
-        self._coord_row_label.setVisible(is_dev)
-        self._coord_label.setVisible(is_dev)
         self._def_current_lbl.setVisible(is_dev)
         self._def_current_label.setVisible(is_dev)
         self._atk_current_lbl.setVisible(is_dev)

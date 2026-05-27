@@ -1,5 +1,19 @@
 # DnD Manager Changelog
 
+## v3.7.3 — Fix ghost "Coordination" windows
+
+v3.7.2 dropped the Battle Statistics section from the global Character
+Sheet but kept four parentless QLabels alive (`_coord_label`,
+`_coord_row_label`, `_vital_calc_label`, `_sp_earned_label`) so the
+existing refresh / dev-view paths wouldn't crash. The dev-view toggle
+then called `setVisible(True)` on the unparented `Coordination` label,
+which Qt promoted to a top-level window. Result: several tiny ghost
+windows on startup labeled "Coordination".
+
+Fixed by deleting the orphan labels and every line that read or wrote
+them. The refresh path now skips the dead writes; the dev-view toggle
+no longer references the missing labels.
+
 ## v3.7.2 — KP is per-encounter only; global sheet is just progression
 
 - The **Battle Statistics section is removed from the global Character
