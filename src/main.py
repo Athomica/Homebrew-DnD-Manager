@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 
@@ -17,6 +19,39 @@ if "QT_QPA_PLATFORM" not in os.environ:
 _here = Path(__file__).resolve().parent
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
+
+
+# v3.7.4: write uncaught exceptions to a crash log so silent GUI crashes
+# (especially on platforms where the bundled binary has no console — e.g.
+# launching from KDE menu on X11) leave a trail we can inspect. The log
+# location is the same XDG data dir we already use for saves/autosaves.
+def _log_dir() -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local/share")
+    p = Path(xdg) / "dnd-manager"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return p
+
+
+_CRASH_LOG = _log_dir() / "last_error.log"
+
+
+def _install_crash_logger() -> None:
+    def _hook(exc_type, exc, tb):
+        try:
+            with _CRASH_LOG.open("w") as f:
+                f.write(f"DnDManager crash @ {datetime.now().isoformat()}\n")
+                f.write(f"QT_QPA_PLATFORM={os.environ.get('QT_QPA_PLATFORM', '(unset)')}\n")
+                f.write(f"XDG_SESSION_TYPE={os.environ.get('XDG_SESSION_TYPE', '(unset)')}\n\n")
+                traceback.print_exception(exc_type, exc, tb, file=f)
+        except OSError:
+            pass
+        # Still print to stderr in case the user ran from a terminal
+        traceback.print_exception(exc_type, exc, tb, file=sys.stderr)
+
+    sys.excepthook = _hook
 
 
 from PyQt6.QtWidgets import QApplication, QComboBox
@@ -49,6 +84,7 @@ class _NoWheelFilter(QObject):
 
 
 def main() -> int:
+    _install_crash_logger()
     qInstallMessageHandler(_qt_message_handler)
     try:
         app = QApplication(sys.argv)

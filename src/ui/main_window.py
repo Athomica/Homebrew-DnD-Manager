@@ -33,7 +33,7 @@ from ui.components.scaling_modifiers import ScalingModifiersPanel
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("DnD Manager v3.7.3")
+        self.setWindowTitle("DnD Manager v3.7.4")
         self.resize(1400, 900)
         self.setMinimumSize(900, 700)
 
@@ -215,10 +215,18 @@ class MainWindow(QMainWindow):
                 f"Could not start a new campaign:\n\n{exc}\n\n"
                 f"Traceback:\n{tb[-1500:]}")
 
+    # v3.7.4: force Qt's own file dialog widget instead of the platform
+    # native dialog. The "native" dialog uses xdg-desktop-portal on Linux,
+    # which on plain X11 sessions without the portal installed crashes
+    # the process when a Save/Open dialog is opened. Qt's built-in widget
+    # works identically on Wayland and X11.
+    _FD_OPT = QFileDialog.Option.DontUseNativeDialog
+
     def _on_open(self) -> None:
         SAVES_DIR.mkdir(parents=True, exist_ok=True)
         path_s, _ = QFileDialog.getOpenFileName(
-            self, "Open Save", str(SAVES_DIR), "JSON saves (*.json)")
+            self, "Open Save", str(SAVES_DIR), "JSON saves (*.json)",
+            options=self._FD_OPT)
         if not path_s:
             return
         try:
@@ -237,7 +245,7 @@ class MainWindow(QMainWindow):
         SAVES_DIR.mkdir(parents=True, exist_ok=True)
         path_s, _ = QFileDialog.getSaveFileName(
             self, "Save As", str(SAVES_DIR / "campaign.json"),
-            "JSON saves (*.json)")
+            "JSON saves (*.json)", options=self._FD_OPT)
         if not path_s:
             return
         path = Path(path_s)
@@ -251,7 +259,8 @@ class MainWindow(QMainWindow):
 
     def _on_export(self) -> None:
         path_s, _ = QFileDialog.getSaveFileName(
-            self, "Export JSON", "campaign_export.json", "JSON (*.json)")
+            self, "Export JSON", "campaign_export.json", "JSON (*.json)",
+            options=self._FD_OPT)
         if not path_s:
             return
         try:
@@ -289,7 +298,7 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         QMessageBox.about(
             self, "About DnD Manager",
-            "DnD Manager v3.7.3\n\n"
+            "DnD Manager v3.7.4\n\n"
             "A solo Dungeon Master's tool for a homebrew dark-fantasy TTRPG.\n\n"
             "Targets KDE Plasma on Wayland (X11 fallback) on Linux.\n"
             "No dice rolling, no networking, no AI."

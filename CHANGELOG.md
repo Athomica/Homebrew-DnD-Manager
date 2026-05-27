@@ -1,5 +1,20 @@
 # DnD Manager Changelog
 
+## v3.7.4 — Save dialog works on X11 + crash logging
+
+**Fixes save crash on X11.** `QFileDialog` was using the platform
+"native" dialog, which on Linux is provided by `xdg-desktop-portal`.
+On a plain X11 session without the portal installed, opening a Save /
+Open / Export dialog crashes the process silently. v3.7.4 forces
+`QFileDialog.Option.DontUseNativeDialog` on every file-picker call —
+Qt's own widget then renders identically on Wayland and X11 with no
+external dependencies.
+
+**Crash log.** A `sys.excepthook` now writes uncaught exceptions to
+`~/.local/share/dnd-manager/last_error.log`, including
+`QT_QPA_PLATFORM` and `XDG_SESSION_TYPE` so future Wayland-vs-X11
+issues have a stack trace to look at instead of a silent exit.
+
 ## v3.7.3 — Fix ghost "Coordination" windows
 
 v3.7.2 dropped the Battle Statistics section from the global Character
