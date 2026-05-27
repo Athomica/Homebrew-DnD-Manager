@@ -1,6 +1,7 @@
 """DnDManager entry point. Sets up Qt platform before importing PyQt6."""
 from __future__ import annotations
 
+import faulthandler
 import os
 import sys
 import traceback
@@ -36,9 +37,14 @@ def _log_dir() -> Path:
 
 
 _CRASH_LOG = _log_dir() / "last_error.log"
+# Separate file for faulthandler so a C-level segfault doesn't get
+# truncated by the Python-side hook trying to write the same file.
+_FAULT_LOG = _log_dir() / "last_fault.log"
 
 
 def _install_crash_logger() -> None:
+    # Python-side exception hook (catches anything PyQt6 routes through
+    # sys.excepthook for slot exceptions, plus normal Python errors).
     def _hook(exc_type, exc, tb):
         try:
             with _CRASH_LOG.open("w") as f:
@@ -48,10 +54,20 @@ def _install_crash_logger() -> None:
                 traceback.print_exception(exc_type, exc, tb, file=f)
         except OSError:
             pass
-        # Still print to stderr in case the user ran from a terminal
         traceback.print_exception(exc_type, exc, tb, file=sys.stderr)
 
     sys.excepthook = _hook
+
+    # C-side fault handler — captures segfaults (e.g. from a deleted Qt
+    # object accessed by a slot). The traceback gets appended to
+    # _FAULT_LOG with the Python call stack at crash time.
+    try:
+        # Keep the fd open for faulthandler's lifetime.
+        _fault_fd = _FAULT_LOG.open("a")
+        faulthandler.enable(file=_fault_fd, all_threads=True)
+    except OSError:
+        # If we can't open the file, fall back to stderr.
+        faulthandler.enable(all_threads=True)
 
 
 from PyQt6.QtWidgets import QApplication, QComboBox

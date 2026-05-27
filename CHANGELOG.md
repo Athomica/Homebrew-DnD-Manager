@@ -1,5 +1,24 @@
 # DnD Manager Changelog
 
+## v3.7.5 — Defensive Ctrl+S + faulthandler for segfaults
+
+The user reported Ctrl+S still crashing on X11 with no log file. Two
+plausible causes: (a) a focused editor widget commits its value as the
+shortcut fires, triggering a refresh chain that raises in a Qt slot;
+(b) a C-level crash (segfault) that bypasses `sys.excepthook` entirely.
+This release adds belt-and-suspenders for both:
+
+- **`_on_save` wraps `save_current` in `try/except`**, posts a "Save
+  failed" dialog with the exception type and message, and writes a
+  Python traceback to `~/.local/share/dnd-manager/last_error.log`.
+- **`faulthandler` is enabled at startup** with output redirected to
+  `~/.local/share/dnd-manager/last_fault.log`. Any segfault (e.g. a
+  deleted Qt C++ object accessed from a Python slot) now leaves a
+  C-level traceback with the Python call stack at the moment of crash.
+
+If Ctrl+S crashes again, one of those two log files will tell us
+exactly what's happening.
+
 ## v3.7.4 — Save dialog works on X11 + crash logging
 
 **Fixes save crash on X11.** `QFileDialog` was using the platform

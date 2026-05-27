@@ -33,7 +33,7 @@ from ui.components.scaling_modifiers import ScalingModifiersPanel
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("DnD Manager v3.7.4")
+        self.setWindowTitle("DnD Manager v3.7.5")
         self.resize(1400, 900)
         self.setMinimumSize(900, 700)
 
@@ -236,10 +236,31 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load failed", str(exc))
 
     def _on_save(self) -> None:
-        if self._state.save_current():
-            self.statusBar().showMessage("Saved.", 2000)
-        else:
-            self._on_save_as()
+        # v3.7.5: explicit try/except so a Ctrl+S that fires while a
+        # spinbox/line-edit has focus (committing its value first, then
+        # invoking the shortcut) can't blow the process apart silently.
+        # File > Save and Ctrl+S go through the same handler but the
+        # focus state differs: with a focused editor widget, the commit
+        # path runs ahead of the save and can race with refresh signals.
+        try:
+            if self._state.save_current():
+                self.statusBar().showMessage("Saved.", 2000)
+            else:
+                self._on_save_as()
+        except Exception as exc:
+            import os, traceback
+            from datetime import datetime
+            try:
+                xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local/share")
+                log_path = Path(xdg) / "dnd-manager" / "last_error.log"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open("w") as f:
+                    f.write(f"Ctrl+S save crash @ {datetime.now().isoformat()}\n")
+                    f.write(f"QT_QPA_PLATFORM={os.environ.get('QT_QPA_PLATFORM', '(unset)')}\n\n")
+                    traceback.print_exc(file=f)
+            except Exception:
+                pass
+            QMessageBox.critical(self, "Save failed", f"{type(exc).__name__}: {exc}")
 
     def _on_save_as(self) -> None:
         SAVES_DIR.mkdir(parents=True, exist_ok=True)
@@ -298,7 +319,7 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         QMessageBox.about(
             self, "About DnD Manager",
-            "DnD Manager v3.7.4\n\n"
+            "DnD Manager v3.7.5\n\n"
             "A solo Dungeon Master's tool for a homebrew dark-fantasy TTRPG.\n\n"
             "Targets KDE Plasma on Wayland (X11 fallback) on Linux.\n"
             "No dice rolling, no networking, no AI."
