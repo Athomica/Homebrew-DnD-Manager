@@ -1,5 +1,34 @@
 # DnD Manager Changelog
 
+## v3.7.7 — Bundle xcb runtime libs (real X11 fix)
+
+v3.7.6's `XKB_CONFIG_ROOT` was a step but didn't fix anything — the
+problem wasn't missing xkb data, it was missing **shared libraries**.
+Running `ldd` on the bundled `libqxcb.so` shows half a dozen
+unresolved deps:
+
+```
+libxkbcommon-x11.so.0 => not found
+libxcb-icccm.so.4     => not found
+libxcb-keysyms.so.1   => not found
+libxcb-shape.so.0     => not found
+libxcb-xkb.so.1       => not found
+```
+
+`collect_all('PyQt6')` doesn't pull these in because they live outside
+the PyQt6 tree. On a system that's missing them — or has a
+binary-incompatible version — the dynamic loader either fails the
+lookup or resolves to a stub, and pressing any modifier key crashes
+inside `libxkbcommon-x11`.
+
+v3.7.7 explicitly bundles the full xcb runtime list — `libxkbcommon`,
+`libxkbcommon-x11`, `libxcb-icccm`, `libxcb-keysyms`, `libxcb-shape`,
+`libxcb-xkb`, `libxcb-cursor`, `libxcb-image`, `libxcb-randr`,
+`libxcb-render-util`, `libxcb-sync`, `libxcb-util`, `libxcb-xfixes`,
+`libxcb-xinerama`, `libxcb-render`, `libxcb` — copied straight off the
+build host via `ldconfig -p` lookup. Verified by extracting the
+PyInstaller bundle: all of them now sit inside the binary.
+
 ## v3.7.6 — Fix X11 modifier-key segfault (root cause)
 
 The faultlog from v3.7.5 revealed the real bug: a segfault inside
