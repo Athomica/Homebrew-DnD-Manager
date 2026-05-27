@@ -624,8 +624,13 @@ class CompactCharacterCard(QFrame):
             self._side, self._instance.instance_id, entry.item_id)
         if not ok:
             QMessageBox.warning(self, "Use item", msg)
-        else:
-            QMessageBox.information(self, "Item used", msg)
+            return
+        # v3.9.5: no more success popup — it interrupted the flow.
+        # Surface the result in the main window's status bar instead;
+        # the user can scan the log for details if they want.
+        mw = self.window()
+        if mw is not None and hasattr(mw, "statusBar"):
+            mw.statusBar().showMessage(msg, 4000)
 
     def _on_equip_selected_weapon(self) -> None:
         row = self._inv_list.currentRow()

@@ -1019,6 +1019,17 @@ class StateManager(QObject):
         if instance_id:
             self.assign_to_side(instance_id, "right")
 
+    def _effective_max(self, character: Character, vital: str) -> int:
+        """v3.9.5: shared helper — return the EFFECTIVE max of a vital
+        (passives + form mults applied) as an int. Used to clamp heals
+        / regen / spell restores so a +50 health_max passive actually
+        lets a potion overheal past the raw 100 stored on the
+        character."""
+        ev = me.effective_vitals(
+            character, self.state.weapons, self.state.armors,
+            self.state.spells, self.state.items)
+        return max(1, int(round(ev[f"{vital}_max"]["effective"])))
+
     def use_item_in_conflict(self, side: str, instance_id: str,
                               item_id: str) -> tuple[bool, str]:
         """Apply an item's effect to the active instance on `side`. The item
@@ -1046,14 +1057,19 @@ class StateManager(QObject):
             return False, f"Not enough mana to use '{item.name}'."
         inst.character.stamina_current -= cost_stam
         inst.character.mana_current -= cost_mana
+        # v3.9.5: clamp to EFFECTIVE max — a +50 health_max passive
+        # from a chestplate lets a potion overheal past the raw 100.
+        eff_hp_max = self._effective_max(inst.character, "health")
+        eff_sp_max = self._effective_max(inst.character, "stamina")
+        eff_mp_max = self._effective_max(inst.character, "mana")
         inst.character.health_current = max(0, min(
-            inst.character.health_max,
+            eff_hp_max,
             inst.character.health_current + getattr(item, "hp_effect", 0)))
         inst.character.stamina_current = max(0, min(
-            inst.character.stamina_max,
+            eff_sp_max,
             inst.character.stamina_current + getattr(item, "stamina_effect", 0)))
         inst.character.mana_current = max(0, min(
-            inst.character.mana_max,
+            eff_mp_max,
             inst.character.mana_current + getattr(item, "mana_effect", 0)))
         entry.quantity -= 1
         if entry.quantity <= 0:
@@ -1260,11 +1276,14 @@ class StateManager(QObject):
                 attr_cur = {"hp": "health_current",
                              "stamina": "stamina_current",
                              "mana": "mana_current"}[eff.target]
-                attr_max = {"hp": "health_max",
-                             "stamina": "stamina_max",
-                             "mana": "mana_max"}[eff.target]
+                vital_key = {"hp": "health",
+                              "stamina": "stamina",
+                              "mana": "mana"}[eff.target]
                 cur = getattr(recipient, attr_cur)
-                mx = getattr(recipient, attr_max)
+                # v3.9.5: spells clamp/scale against EFFECTIVE max too
+                # (heals can fill past the raw stored max when a
+                # passive buffs it; percent-of-max scales correctly).
+                mx = self._effective_max(recipient, vital_key)
                 delta = int(round(amt)) * sign
                 if eff.scope == "percent":
                     delta = int(round(mx * (amt / 100.0))) * sign

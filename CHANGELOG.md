@@ -1,5 +1,23 @@
 # DnD Manager Changelog
 
+## v3.9.5 — Effective-max heal cap; quieter item use
+
+### Heals now respect effective max
+A health potion of +50 on a base-100 character wearing a chestplate
+that adds +50 health_max was clamping to the raw 100 — wasted heal.
+v3.9.5 adds a `_effective_max(character, vital)` helper to StateManager
+and routes both the item-use clamp and the spell heal/restore clamp
+through it. So that potion now heals to 150, and percent-of-max
+effects (e.g. "+10% mana") scale against the effective max too.
+Verified: 80 HP + Big Potion (+50) on a +50-buff character → 130;
+110 HP + Big Potion → 150 (clamped at eff_max).
+
+### "Item used" popup removed
+Successfully using an item no longer pops a modal dialog. The
+combat log still records the use; the main window's status bar
+flashes a brief confirmation if you want a visual cue. Error path
+(not enough stamina / no item in inventory) still pops a warning.
+
 ## v3.9.4 — Forms overhaul + encounter restructure + cap fixes
 
 ### Passive affect dropdown — only max vitals
