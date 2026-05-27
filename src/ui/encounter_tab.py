@@ -171,6 +171,12 @@ class CompactCharacterCard(QFrame):
         self._dice_log.setProperty("role", "dim")
         self._dice_log.setMinimumWidth(100)
         dl.addWidget(self._dice_log)
+        # v3.9.1 (C1): sparkline visualizing the last N rolls. Recent
+        # rolls in blue, older in dim slate, max-face (critical) in red.
+        from ui.components.dice_sparkline import DiceSparkline
+        self._dice_spark = DiceSparkline(max_face=instance.character.dice)
+        self._dice_spark.setMinimumWidth(80)
+        dl.addWidget(self._dice_spark)
         dl.addStretch(1)
         outer.addWidget(self._dice_frame)
         # Apply the initial (compact) styling.
@@ -256,16 +262,25 @@ class CompactCharacterCard(QFrame):
     def _make_grouped_tab(self, sections: list) -> QWidget:
         """v3.4.6: wrap multiple sections in a single tab with colored
         sub-headers. Each section gets a 'role' chip header above its
-        content, so the user can see groupings at a glance."""
+        content, so the user can see groupings at a glance.
+
+        v3.9.1: the inner content has a fixed minimum width — when the
+        side panel is narrower than that, the scroll area enables its
+        horizontal scrollbar instead of squashing form widgets down to
+        sub-editable widths. (Equipment combos previously crushed to
+        single-character widths on narrow windows.)
+        """
         from PyQt6.QtWidgets import QScrollArea
         wrap = QWidget()
         outer = QVBoxLayout(wrap)
         outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
-        # Inventory + form lists can grow tall; wrap in a scroll area so
-        # individual sections aren't capped at the card's height.
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         inner = QWidget()
+        inner.setMinimumWidth(280)  # smaller → horizontal scrollbar.
         v = QVBoxLayout(inner)
         v.setContentsMargins(4, 4, 4, 4); v.setSpacing(10)
         for label_text, section in sections:
@@ -941,6 +956,30 @@ class CompactCharacterCard(QFrame):
         if (self._mana_bar.current_input.value() != c.mana_current
                 or self._mana_bar.max_input.value() != mp_max):
             self._mana_bar.set_values(c.mana_current, mp_max, animate=True)
+        # v3.9.1 (B3): tell every bar whether we're in conflict so the
+        # effective values take typographic precedence over the raw
+        # cur/max spinboxes.
+        enc = self._state.state.active_encounter
+        in_conflict = bool(enc and enc.in_conflict_mode)
+        for bar in (self._hp_bar, self._stam_bar, self._mana_bar):
+            bar.set_conflict_mode(in_conflict)
+        # v3.9.1: push effective vitals so passives (incl. inflicted
+        # bleed/buff from a weapon hit, item-granted, form-mult)
+        # show up in green/red AND raise the current spinbox's cap.
+        # Previously the compact card never called set_effective and
+        # the current value was stuck at the raw max.
+        ev = me.effective_vitals(
+            c, self._state.state.weapons, self._state.state.armors,
+            self._state.state.spells, self._state.state.items)
+        self._hp_bar.set_effective(
+            ev["health"]["effective"], ev["health_max"]["effective"],
+            ev["health"]["delta"], ev["health_max"]["delta"])
+        self._stam_bar.set_effective(
+            ev["stamina"]["effective"], ev["stamina_max"]["effective"],
+            ev["stamina"]["delta"], ev["stamina_max"]["delta"])
+        self._mana_bar.set_effective(
+            ev["mana"]["effective"], ev["mana_max"]["effective"],
+            ev["mana"]["delta"], ev["mana_max"]["delta"])
         if self._fall_in.value() != c.fall_height:
             self._fall_in.blockSignals(True)
             self._fall_in.setValue(c.fall_height)
@@ -969,6 +1008,13 @@ class CompactCharacterCard(QFrame):
             else:
                 parts.append(f"<b>{d}</b>")
         self._dice_log.setText("  ".join(parts) if parts else "(no rolls yet)")
+        # v3.9.1 (C1): keep the sparkline in sync. dice_history is
+        # already newest-first in the model — reverse so the sparkline
+        # reads left-to-right (oldest → newest).
+        if hasattr(self, "_dice_spark"):
+            self._dice_spark.set_values(
+                list(reversed(self._instance.dice_history)),
+                max_face=c.dice)
         try:
             can_up, _ = self._state.can_change_turn(self._instance.instance_id, +1)
             can_dn, _ = self._state.can_change_turn(self._instance.instance_id, -1)
@@ -1707,7 +1753,81 @@ class EncounterTab(QWidget):
             QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             msg = self._state.end_encounter()
-            QMessageBox.information(self, "Encounter Ended", msg)
+            self._show_end_encounter_summary(msg)
+
+    def _show_end_encounter_summary(self, fallback_msg: str) -> None:
+        from PyQt6.QtGui import QBrush, QColor
+        """v3.9.1 (C2): rich per-character roll-up after end_encounter.
+
+        Falls back to the old one-line dialog if the structured
+        summary isn't available (e.g. ended an encounter that was
+        never entered)."""
+        summary = getattr(self._state, "last_encounter_summary", None)
+        if not summary or not summary.get("rows"):
+            QMessageBox.information(self, "Encounter Ended", fallback_msg)
+            return
+        from PyQt6.QtWidgets import (
+            QDialog, QTableWidget, QTableWidgetItem,
+            QDialogButtonBox, QVBoxLayout as _QV, QHeaderView as _QH,
+        )
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Encounter '{summary['name']}' ended")
+        dlg.resize(640, 380)
+        layout = _QV(dlg)
+        head = QLabel(
+            f"<b>{summary['survivors']}</b> updated · "
+            f"<b>{summary['new_uniques']}</b> new uniques from templates"
+        )
+        head.setTextFormat(Qt.TextFormat.RichText)
+        head.setStyleSheet("padding: 6px; color: #ccc;")
+        layout.addWidget(head)
+        table = QTableWidget(0, 7)
+        table.setHorizontalHeaderLabels(
+            ["Character", "Side", "Status", "Was Template",
+             "KP", "Solo KP", "SP earned"])
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(_QH.ResizeMode.Stretch)
+        for r, row in enumerate(summary["rows"]):
+            table.insertRow(r)
+            name_item = QTableWidgetItem(row["name"])
+            table.setItem(r, 0, name_item)
+            table.setItem(r, 1, QTableWidgetItem(row["side"]))
+            status = "Alive" if row["alive"] else "💀 Deceased"
+            status_item = QTableWidgetItem(status)
+            if not row["alive"]:
+                status_item.setForeground(QBrush(QColor("#f76b66")))
+            table.setItem(r, 2, status_item)
+            table.setItem(r, 3, QTableWidgetItem("yes" if row["was_template"] else ""))
+            table.setItem(r, 4, QTableWidgetItem(str(row["kill_points"])))
+            table.setItem(r, 5, QTableWidgetItem(str(row["solo_kp"])))
+            sp_item = QTableWidgetItem(f"{row['sp_earned']:.2f}")
+            if row["sp_earned"] > 0:
+                sp_item.setForeground(QBrush(QColor("#7fd194")))
+            table.setItem(r, 6, sp_item)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        layout.addWidget(table)
+        # Copy-to-clipboard button alongside Close.
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        copy_btn = btns.addButton("Copy to clipboard",
+                                    QDialogButtonBox.ButtonRole.ActionRole)
+        def _copy():
+            lines = [f"Encounter '{summary['name']}' summary"]
+            lines.append("name\tside\tstatus\twas_template\tKP\tsolo_KP\tSP_earned")
+            for row in summary["rows"]:
+                lines.append("\t".join((
+                    row["name"], row["side"],
+                    "alive" if row["alive"] else "deceased",
+                    "yes" if row["was_template"] else "no",
+                    str(row["kill_points"]), str(row["solo_kp"]),
+                    f"{row['sp_earned']:.2f}",
+                )))
+            from PyQt6.QtWidgets import QApplication as _QA
+            _QA.clipboard().setText("\n".join(lines))
+        copy_btn.clicked.connect(_copy)
+        btns.rejected.connect(dlg.reject)
+        btns.accepted.connect(dlg.accept)
+        layout.addWidget(btns)
+        dlg.exec()
 
     def _on_toggle_conflict(self) -> None:
         enc = self._state.state.active_encounter

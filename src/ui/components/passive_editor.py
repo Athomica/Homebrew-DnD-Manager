@@ -129,6 +129,48 @@ class PassiveListEditor(QWidget):
         self._remove_btn.clicked.connect(self._on_remove)
         self._apply_btn.clicked.connect(self._on_apply)
 
+        # v3.9.1: live-commit edits so the Effective columns and the
+        # vital bar deltas refresh in real time. Previously, only the
+        # explicit "Apply Edits" button pushed the change. Now any
+        # field edit (amount / scope / affected / duration / active /
+        # name) commits the selected passive immediately. The Apply
+        # button stays as a convenience but is no longer required.
+        self._amount.valueChanged.connect(self._on_apply_silent)
+        self._scope.currentIndexChanged.connect(self._on_apply_silent)
+        self._affected.currentIndexChanged.connect(self._on_apply_silent)
+        self._duration.currentIndexChanged.connect(self._on_apply_silent)
+        self._duration_turns.valueChanged.connect(self._on_apply_silent)
+        self._active.toggled.connect(self._on_apply_silent)
+        # Name updates only on editingFinished (avoids commit on every
+        # keystroke, which would shuffle the list visually).
+        self._name.editingFinished.connect(self._on_apply_silent)
+
+    def _on_apply_silent(self, *_args) -> None:
+        """v3.9.1: same as _on_apply but tolerant of no selected row
+        (we wire it to widgets that fire on initial population) and
+        skips the explicit setCurrentRow re-selection so the user's
+        focus / scroll position doesn't jump while they're editing."""
+        row = self._list.currentRow()
+        if row < 0 or row >= len(self._passives):
+            return
+        p = self._passives[row]
+        p.name = self._name.text() or p.name
+        p.amount = self._amount.value()
+        p.scope = self._scope.currentData() or "fixed"
+        p.affected_value = self._current_affected_text()
+        p.duration = self._duration_value()
+        p.active = self._active.isChecked()
+        # Refresh the list label in place so amount/source updates show
+        # without re-selecting.
+        item = self._list.item(row)
+        if item is not None:
+            unit = "%" if p.scope == "percent" else ""
+            tag = "✓" if p.active else "·"
+            item.setText(
+                f"{tag} {p.name} ({p.amount:+.2f}{unit} on "
+                f"{p.affected_value or '?'}, {p.duration}, src={p.source})")
+        self.changed.emit()
+
     def load(self, passives: list[Passive]) -> None:
         self._passives = passives
         self._refresh_list()

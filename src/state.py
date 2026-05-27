@@ -323,6 +323,8 @@ class StateManager(QObject):
         self.state = AppState()
         self._apply_modifiers_to_engine()
         self._current_save_path: Optional[Path] = None
+        # v3.9.1: structured roll-up from the most recent end_encounter().
+        self.last_encounter_summary: Optional[dict] = None
         self._autosave_index = 0
 
         self._autosave_timer = QTimer(self)
@@ -1620,6 +1622,10 @@ class StateManager(QObject):
             side_for[iid] = left_n
         for iid in enc.right_participant_ids + enc.right_deceased_ids:
             side_for[iid] = right_n
+        # v3.9.1 (C2): build a per-character roll-up so the UI can show
+        # an end-of-encounter summary dialog instead of just a one-line
+        # status message. Captured BEFORE end_encounter clears state.
+        summary_rows: list[dict] = []
         for inst in enc.instances:
             if inst.is_in_bin:
                 continue
@@ -1630,6 +1636,22 @@ class StateManager(QObject):
             participants_n = side_for.get(inst.instance_id, inst_char.participants)
             sp = me.sp_earned(inst_char.solo_kp, inst_char.kill_points,
                               participants_n, cur_level)
+            # Determine side label for the summary.
+            side_label = "—"
+            if inst.instance_id in enc.left_participant_ids + enc.left_deceased_ids:
+                side_label = "left"
+            elif inst.instance_id in enc.right_participant_ids + enc.right_deceased_ids:
+                side_label = "right"
+            summary_rows.append({
+                "name": inst_char.name,
+                "side": side_label,
+                "alive": alive,
+                "was_template": inst.is_template_instance,
+                "kill_points": int(inst_char.kill_points or 0),
+                "solo_kp": int(inst_char.solo_kp or 0),
+                "sp_earned": round(sp, 2),
+                "participants": participants_n,
+            })
             if inst.is_template_instance:
                 if alive:
                     import copy as _copy
@@ -1687,6 +1709,13 @@ class StateManager(QObject):
         msg = (f"Encounter '{enc_name}' ended. "
                f"{survivors} unique character(s) updated, "
                f"{new_uniques} new unique character(s) from templates.")
+        # v3.9.1 (C2): stash the summary so the UI can pop a rich dialog.
+        self.last_encounter_summary = {
+            "name": enc_name,
+            "survivors": survivors,
+            "new_uniques": new_uniques,
+            "rows": summary_rows,
+        }
         self.log_event("encounter_ended", msg, category="combat")
         # v3.4: remove only THIS encounter from the list; select another if any.
         ended_id = enc.id

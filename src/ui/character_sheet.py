@@ -118,10 +118,11 @@ class CharacterSheet(QWidget):
         add_section("Progression", "Progression", self._build_progression_section)
         add_section("Level / Dice", "Level / Dice", self._build_level_dice_section)
         add_section("Proficiencies", "Proficiencies", self._build_proficiencies_section)
+        # v3.9.1: "Throw Results" section removed — the Proficiencies
+        # table now has both SP/Effective-SP and Throw/Effective-Throw
+        # columns, so the standalone table was a duplicate.
         add_section("Combat Resolution", "Combat Resolution",
                     self._build_combat_resolution_section)
-        add_section("Throw Results", "Throw Results", self._build_throw_results_section,
-                    default_open=False)
         add_section("Weapons", "Weapons", self._build_weapons_section)
         add_section("Spells", "Spells", self._build_spells_section)
         add_section("Armor", "Armor Equipment", self._build_armor_section)
@@ -677,27 +678,6 @@ class CharacterSheet(QWidget):
         self._refresh_derived()
 
     # ------------------------------------------------------------------
-    # Throw Results
-    # ------------------------------------------------------------------
-    def _build_throw_results_section(self) -> QWidget:
-        wrap = QWidget()
-        outer = QVBoxLayout(wrap)
-        outer.setContentsMargins(0, 0, 0, 0)
-        self._throw_table = QTableWidget(0, 4)
-        self._throw_table.setHorizontalHeaderLabels(
-            ["Proficiency", "Effective SP", "Throw", "Crit?"])
-        self._throw_table.verticalHeader().setVisible(False)
-        self._throw_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch)
-        self._throw_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        for _ in PROFICIENCIES:
-            self._throw_table.insertRow(self._throw_table.rowCount())
-        h_total = self._throw_table.verticalHeader().defaultSectionSize() * (len(PROFICIENCIES) + 1)
-        self._throw_table.setMinimumHeight(h_total)
-        outer.addWidget(self._throw_table)
-        return wrap
-
-    # ------------------------------------------------------------------
     # Weapons
     # ------------------------------------------------------------------
     def _build_weapons_section(self) -> QWidget:
@@ -1240,22 +1220,13 @@ class CharacterSheet(QWidget):
                     bar.current_input.setButtonSymbols(
                         QAbstractSpinBox.ButtonSymbols.UpDownArrows)
 
-            # v3.8: push effective vitals into every bar so passives
-            # show up next to the raw values AND raise the current-cap
-            # past the stored max when a passive bumps health_max etc.
-            ev = me.effective_vitals(
-                self._char, self._state.state.weapons,
-                self._state.state.armors, self._state.state.spells,
-                self._state.state.items)
-            self._hp_bar.set_effective(
-                ev["health"]["effective"], ev["health_max"]["effective"],
-                ev["health"]["delta"], ev["health_max"]["delta"])
-            self._stam_bar.set_effective(
-                ev["stamina"]["effective"], ev["stamina_max"]["effective"],
-                ev["stamina"]["delta"], ev["stamina_max"]["delta"])
-            self._mana_bar.set_effective(
-                ev["mana"]["effective"], ev["mana_max"]["effective"],
-                ev["mana"]["delta"], ev["mana_max"]["delta"])
+            # v3.9.1: effective vitals get pushed from a shared helper
+            # so that passive edits (which only fire _refresh_derived,
+            # not _refresh_inputs) ALSO get to update the inline ≈N
+            # labels AND the current-spinbox cap. Previously they did
+            # not — typing in the passive editor left the vital bars
+            # stale until the next external reload.
+            self._push_effective_vitals()
 
             # v3.7.2: KP totals no longer live on the global character,
             # so there's nothing to push to the (deleted) labels here.
@@ -1321,11 +1292,35 @@ class CharacterSheet(QWidget):
         finally:
             self._suspend = False
 
+    def _push_effective_vitals(self) -> None:
+        """v3.9.1: push effective_vitals into each VitalBar. Updates the
+        inline ≈N delta label AND the current spinbox's hard cap. Safe
+        to call from refresh_derived — it doesn't touch the editable
+        current/max spinbox VALUES, only the cap on the current input.
+        """
+        ev = me.effective_vitals(
+            self._char, self._state.state.weapons,
+            self._state.state.armors, self._state.state.spells,
+            self._state.state.items)
+        self._hp_bar.set_effective(
+            ev["health"]["effective"], ev["health_max"]["effective"],
+            ev["health"]["delta"], ev["health_max"]["delta"])
+        self._stam_bar.set_effective(
+            ev["stamina"]["effective"], ev["stamina_max"]["effective"],
+            ev["stamina"]["delta"], ev["stamina_max"]["delta"])
+        self._mana_bar.set_effective(
+            ev["mana"]["effective"], ev["mana_max"]["effective"],
+            ev["mana"]["delta"], ev["mana_max"]["delta"])
+
     def _refresh_derived(self) -> None:
         """Recompute and push only DERIVED (read-only label) values.
 
         Safe to call on every character_changed - it never touches input widgets.
         """
+        # v3.9.1: push effective vitals here so passive / form edits
+        # update green/red labels in real time. Doesn't touch the
+        # cur/max spinbox VALUES, only the cap on current.
+        self._push_effective_vitals()
         # Level / total SP
         total_sp = self._char.total_sp()
         lvl = me.level(total_sp)
@@ -1384,13 +1379,8 @@ class CharacterSheet(QWidget):
                         _eff_color(pd['throw_delta']))))
                 row += 1
 
-        # Throw results table
-        for i, p in enumerate(PROFICIENCIES):
-            self._throw_table.setItem(i, 0, QTableWidgetItem(PROF_LABELS[p]))
-            self._throw_table.setItem(i, 1, QTableWidgetItem(f"{profs[p]['effective_sp']:.2f}"))
-            self._throw_table.setItem(i, 2, QTableWidgetItem(f"{profs[p]['throw']:.1f}"))
-            self._throw_table.setItem(i, 3,
-                QTableWidgetItem("yes" if profs[p]["is_critical"] else ""))
+        # v3.9.1: Throw Results table merged into the Proficiencies
+        # table (columns "Effective Throw" + crit marker).
 
         # Combat resolution
         c = self._compute_combat()

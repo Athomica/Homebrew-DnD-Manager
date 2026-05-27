@@ -104,6 +104,32 @@ class VitalBar(QWidget):
             w.blockSignals(False)
         self._refresh_bar(animate=animate, prev_value=prev)
 
+    def set_conflict_mode(self, in_conflict: bool) -> None:
+        """v3.9.1 (B3): during a conflict, the effective values are
+        what actually matter (a Bleed of -5 health on top of a max of
+        100 means you're really at 95). Swap typography so the
+        Effective ≈N chip becomes the dominant number and the raw
+        spinboxes recede to muted helpers.
+        """
+        self._in_conflict = in_conflict
+        if in_conflict:
+            self._eff_lbl.setStyleSheet(
+                "font-size: 14pt; font-weight: bold; padding-left: 6px;")
+            # Mute the raw cur/max spinboxes — they're still editable
+            # but visually take a back seat.
+            mute = "QSpinBox { color: #888; font-size: 9pt; }"
+            self._current_input.setStyleSheet(mute)
+            self._max_input.setStyleSheet(mute)
+        else:
+            self._eff_lbl.setStyleSheet("")
+            self._current_input.setStyleSheet("")
+            self._max_input.setStyleSheet("")
+        # Re-render the effective label with the new style by
+        # forcing a refresh through the last cached values.
+        if hasattr(self, "_last_eff"):
+            ec, em, cd, md = self._last_eff
+            self.set_effective(ec, em, cd, md)
+
     def set_effective(self, eff_current: float, eff_max: float,
                        cur_delta: float, max_delta: float) -> None:
         """v3.8: tell the bar what the post-passive values look like so
@@ -115,16 +141,34 @@ class VitalBar(QWidget):
         # Cap the current spinbox at the EFFECTIVE max — what the user
         # can actually heal up to right now.
         self._current_input.setMaximum(eff_max_i)
+        # Cache so set_conflict_mode can re-render without recomputing.
+        self._last_eff = (eff_current, eff_max, cur_delta, max_delta)
+        in_conflict = getattr(self, "_in_conflict", False)
         # Compose the inline effective label.
+        # v3.9.1 (B3): during conflict, the label reads as the
+        # PRIMARY number with the raw value sidelined to a small chip.
+        # Outside conflict we only show the ≈ chip when it differs.
         parts: list[str] = []
-        if abs(max_delta) >= 0.5:
-            color = "#7fd194" if max_delta > 0 else "#f76b66"
+        if in_conflict:
+            # Always show effective cur/max as the primary numbers.
+            cur_color = ("#7fd194" if cur_delta > 0
+                          else ("#f76b66" if cur_delta < 0 else "#ffffff"))
+            max_color = ("#7fd194" if max_delta > 0
+                          else ("#f76b66" if max_delta < 0 else "#ffffff"))
             parts.append(
-                f"<span style='color:{color};'>max≈{int(round(eff_max))}</span>")
-        if abs(cur_delta) >= 0.5:
-            color = "#7fd194" if cur_delta > 0 else "#f76b66"
-            parts.append(
-                f"<span style='color:{color};'>cur≈{int(round(eff_current))}</span>")
+                f"<span style='color:{cur_color};'><b>{int(round(eff_current))}</b></span>"
+                f" / "
+                f"<span style='color:{max_color};'><b>{int(round(eff_max))}</b></span>"
+            )
+        else:
+            if abs(max_delta) >= 0.5:
+                color = "#7fd194" if max_delta > 0 else "#f76b66"
+                parts.append(
+                    f"<span style='color:{color};'>max≈{int(round(eff_max))}</span>")
+            if abs(cur_delta) >= 0.5:
+                color = "#7fd194" if cur_delta > 0 else "#f76b66"
+                parts.append(
+                    f"<span style='color:{color};'>cur≈{int(round(eff_current))}</span>")
         if parts:
             self._eff_lbl.setText("  ".join(parts))
             self._eff_lbl.setTextFormat(Qt.TextFormat.RichText)

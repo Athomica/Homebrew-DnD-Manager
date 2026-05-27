@@ -1,5 +1,52 @@
 # DnD Manager Changelog
 
+## v3.9.1 — Bug fixes + UX round 2
+
+### Bug fixes
+- **Proficiencies + Throw Results merged.** The standalone "Throw
+  Results" section is gone; the Proficiencies table now carries SP,
+  Effective SP, Dice Bonus, Throw Result and Effective Throw in one
+  place.
+- **Equipment tabs scroll vertically.** The grouped tab's inner widget
+  now has a 280 px min width — narrow side panels enable horizontal
+  scroll instead of squashing combo boxes — and vertical scroll has
+  always been there for short windows. Together: form rows stay
+  editable at any window size.
+- **Effective passive values update in real time.** Two fixes:
+  1. `set_effective(...)` is now called from `_refresh_derived` (via
+     a new `_push_effective_vitals` helper) — previously it was only
+     wired into `_refresh_inputs`, so passive edits never reached the
+     vital bars.
+  2. The Passive editor live-commits every field change (amount /
+     scope / affected / duration / active / name). Clicking "Apply
+     Edits" is no longer required for the Effective columns and ≈N
+     vital labels to refresh.
+- **Health-current cap follows effective max.** The compact character
+  card never called `set_effective` on its vital bars; now it does.
+  When a passive raises `health_max`, the current spinbox's cap
+  raises with it; when a debuff lowers it, the cap drops.
+
+### Round 2 UX picks landed
+- **B3 — conflict-mode prominence inversion.** During a conflict the
+  effective values become the primary number on each vital bar (big,
+  bold, color-coded green/red). The raw cur/max spinboxes mute to a
+  smaller gray font. Reverts to normal styling outside conflict.
+- **C1 — dice-roll sparkline.** Each compact card gets a tiny bar
+  chart next to the DICE log showing the last N rolls. Newest roll on
+  the right (bright blue), older rolls (slate), max-face rolls
+  (critical) flagged red. Dashed average line.
+- **C2 — end-of-encounter summary dialog.** Ending an encounter pops
+  a per-character roll-up table — Side, Status, Was Template,
+  KP, Solo KP, SP earned — with a green tint on positive SP and a
+  red Deceased status. Includes a "Copy to clipboard" button for
+  session notes.
+
+### Deferred to round 3
+- **B1** sticky section nav on the global character sheet.
+- **B2** forms editor visual rewrite (bars per multiplier).
+- **B4** status-effect per-turn preview (needs a `tick_per_turn`
+  field on Passive — model extension first).
+
 ## v3.9 — Passive foundations + UX round 1
 
 ### Passive system widened
