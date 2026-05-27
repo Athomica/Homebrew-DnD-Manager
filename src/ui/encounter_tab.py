@@ -1011,6 +1011,24 @@ class CompactCharacterCard(QFrame):
         hp_max = c.vital_max_with_form("health")
         st_max = c.vital_max_with_form("stamina")
         mp_max = c.vital_max_with_form("mana")
+        # v3.9.6: set_effective must run BEFORE set_values so the
+        # current spinbox's cap (driven by _eff_max_clamp) is in place
+        # when set_values writes the current value. Otherwise a +100
+        # health_max passive plus an 80 → 120 heal would land set_values
+        # FIRST with cap=100, clamping the 120 down to 100 before
+        # set_effective ever raised the cap.
+        ev = me.effective_vitals(
+            c, self._state.state.weapons, self._state.state.armors,
+            self._state.state.spells, self._state.state.items)
+        self._hp_bar.set_effective(
+            ev["health"]["effective"], ev["health_max"]["effective"],
+            ev["health"]["delta"], ev["health_max"]["delta"])
+        self._stam_bar.set_effective(
+            ev["stamina"]["effective"], ev["stamina_max"]["effective"],
+            ev["stamina"]["delta"], ev["stamina_max"]["delta"])
+        self._mana_bar.set_effective(
+            ev["mana"]["effective"], ev["mana_max"]["effective"],
+            ev["mana"]["delta"], ev["mana_max"]["delta"])
         if (self._hp_bar.current_input.value() != c.health_current
                 or self._hp_bar.max_input.value() != hp_max):
             self._hp_bar.set_values(c.health_current, hp_max, animate=True)
@@ -1027,23 +1045,6 @@ class CompactCharacterCard(QFrame):
         in_conflict = bool(enc and enc.in_conflict_mode)
         for bar in (self._hp_bar, self._stam_bar, self._mana_bar):
             bar.set_conflict_mode(in_conflict)
-        # v3.9.1: push effective vitals so passives (incl. inflicted
-        # bleed/buff from a weapon hit, item-granted, form-mult)
-        # show up in green/red AND raise the current spinbox's cap.
-        # Previously the compact card never called set_effective and
-        # the current value was stuck at the raw max.
-        ev = me.effective_vitals(
-            c, self._state.state.weapons, self._state.state.armors,
-            self._state.state.spells, self._state.state.items)
-        self._hp_bar.set_effective(
-            ev["health"]["effective"], ev["health_max"]["effective"],
-            ev["health"]["delta"], ev["health_max"]["delta"])
-        self._stam_bar.set_effective(
-            ev["stamina"]["effective"], ev["stamina_max"]["effective"],
-            ev["stamina"]["delta"], ev["stamina_max"]["delta"])
-        self._mana_bar.set_effective(
-            ev["mana"]["effective"], ev["mana_max"]["effective"],
-            ev["mana"]["delta"], ev["mana_max"]["delta"])
         # v3.9.2 (B4): per-turn forecast for bleed/regen-style passives.
         all_p = me.collect_active_passives(
             c, self._state.state.weapons, self._state.state.armors,

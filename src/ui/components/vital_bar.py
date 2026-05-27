@@ -98,10 +98,23 @@ class VitalBar(QWidget):
             else NoWheelSpinBox.ButtonSymbols.UpDownArrows)
 
     def set_values(self, current: int, maximum: int, animate: bool = True) -> None:
+        # v3.9.6: previously set_values forced the current spinbox's
+        # ceiling down to the RAW max — so when set_effective later
+        # bumped the cap to 200, any over-raw-max current was already
+        # clamped to 100. Order of calls in the refresh path:
+        #   1. set_values(80, 100)  -> cap drops to 100
+        #   2. set_effective(... eff_max=200 ...) -> cap goes back to 200
+        # …but the spinbox value had already been clamped to 100.
+        # Result: a +50 health potion on a buffed character stayed at
+        # 100 instead of 120. Fix: the current spinbox's cap is the
+        # MAX of the raw maximum and any cached effective max from a
+        # prior set_effective call. We never SHRINK the cap here —
+        # set_effective owns shrinking when a buff is removed.
         for w in (self._current_input, self._max_input):
             w.blockSignals(True)
         self._max_input.setValue(maximum)
-        self._current_input.setMaximum(max(maximum, 1))
+        cap = max(int(maximum), int(getattr(self, "_eff_max_clamp", 0)), 1)
+        self._current_input.setMaximum(cap)
         prev = self._current_input.value()
         self._current_input.setValue(current)
         for w in (self._current_input, self._max_input):

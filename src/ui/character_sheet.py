@@ -1449,6 +1449,12 @@ class CharacterSheet(QWidget):
             self._origin_in.setText(self._char.origin)
 
             # Vitals
+            # v3.9.6: push effective vitals FIRST so the spinbox cap is
+            # already raised when set_values writes the current value.
+            # Otherwise a +50 health_max passive plus an 80→120 heal
+            # would land set_values with cap=100 and clamp current
+            # back to 100 before set_effective ever bumped the cap.
+            self._push_effective_vitals()
             if self._char.is_template:
                 self._hp_bar.set_values(self._char.health_max, self._char.health_max,
                                         animate=False)
@@ -1468,14 +1474,6 @@ class CharacterSheet(QWidget):
                     bar.current_input.setReadOnly(False)
                     bar.current_input.setButtonSymbols(
                         QAbstractSpinBox.ButtonSymbols.UpDownArrows)
-
-            # v3.9.1: effective vitals get pushed from a shared helper
-            # so that passive edits (which only fire _refresh_derived,
-            # not _refresh_inputs) ALSO get to update the inline ≈N
-            # labels AND the current-spinbox cap. Previously they did
-            # not — typing in the passive editor left the vital bars
-            # stale until the next external reload.
-            self._push_effective_vitals()
 
             # v3.7.2: KP totals no longer live on the global character,
             # so there's nothing to push to the (deleted) labels here.

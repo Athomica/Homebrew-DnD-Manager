@@ -1,5 +1,32 @@
 # DnD Manager Changelog
 
+## v3.9.6 — Heal-past-base actually displays
+
+v3.9.5 routed the heal math through `_effective_max` — so `state.use_item_in_conflict`
+correctly bumped `health_current` from 80 → 120 when a +50 health_max
+chestplate buff was active. But the UI still snapped back to 100.
+
+Root cause: refresh-order race in the VitalBar. Both
+`CompactCharacterCard` and `CharacterSheet` called
+`set_values(current=120, raw_max=100)` BEFORE `set_effective(eff_max=200)`.
+Inside `set_values`, the spinbox cap was lowered to the raw max (100)
+and the spinbox auto-clamped the current value 120 → 100. The
+subsequent `set_effective` raised the cap to 200 but the value was
+already lost.
+
+Two fixes:
+
+1. **`set_values` never shrinks the cap below `_eff_max_clamp`.**
+   The cap is now `max(raw_maximum, prior_eff_clamp, 1)`. `set_effective`
+   still owns shrinking the cap when a buff is removed.
+2. **Refresh order reversed.** Both the compact card and the global
+   sheet now call `set_effective(...)` BEFORE `set_values(...)`, so the
+   cap is already raised by the time the current value lands.
+
+Verified end-to-end: hero with 100 base HP + 100-buff chestplate at
+80 HP, applies a +40 potion → `health_current` = 120 in state AND
+on the bar.
+
 ## v3.9.5 — Effective-max heal cap; quieter item use
 
 ### Heals now respect effective max
