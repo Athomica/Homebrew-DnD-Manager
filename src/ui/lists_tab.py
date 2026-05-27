@@ -783,7 +783,7 @@ class ItemsListTab(QWidget):
         form.addRow("Tags:", self._tags_in)
         form.addRow("Stamina Cost to use:", self._stamina_in)
         form.addRow("Mana Cost to use:", self._mana_in)
-        form.addRow("HP Effect (+gain / -drain):", self._hp_effect_in)
+        form.addRow("Health Effect (+gain / -drain):", self._hp_effect_in)
         form.addRow("Stamina Effect:", self._stam_effect_in)
         form.addRow("Mana Effect:", self._mana_effect_in)
         form.addRow("Description:", self._desc_in)
@@ -810,7 +810,7 @@ class ItemsListTab(QWidget):
             label = f"{it.name} (slot {it.slot_count})"
             effects = []
             if getattr(it, "hp_effect", 0):
-                effects.append(f"HP{it.hp_effect:+d}")
+                effects.append(f"Health{it.hp_effect:+d}")
             if getattr(it, "stamina_effect", 0):
                 effects.append(f"SP{it.stamina_effect:+d}")
             if getattr(it, "mana_effect", 0):

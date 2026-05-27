@@ -323,19 +323,128 @@ def luck_tier_sum_for(character: Character) -> float:
     return tier_sum(character.effective_sp("luck"), "luck")
 
 
-def derive_proficiency_view(character: Character) -> dict[str, dict[str, float]]:
+def collect_active_passives(character: Character,
+                              weapons: Optional[list] = None,
+                              armors: Optional[list] = None,
+                              spells: Optional[list] = None) -> list:
+    """v3.8: gather every active Passive that can currently affect this
+    character. Includes the character's own .passives plus the .passives
+    on any equipped weapon, shield, armor piece, or castable spell.
+    Inactive passives are excluded."""
+    out: list = []
+    for p in getattr(character, "passives", []) or []:
+        if getattr(p, "active", True):
+            out.append(p)
+    by_id = {}
+    if weapons:
+        by_id.update({w.id: w for w in weapons})
+    if armors:
+        by_id.update({a.id: a for a in armors})
+    if spells:
+        by_id.update({s.id: s for s in spells})
+    equipped_ids = (
+        getattr(character, "primary_weapon_id", None),
+        getattr(character, "secondary_weapon_id", None),
+        getattr(character, "shield_id", None),
+        getattr(character, "helmet_id", None),
+        getattr(character, "chest_id", None),
+        getattr(character, "gloves_id", None),
+        getattr(character, "pants_id", None),
+        getattr(character, "boots_id", None),
+        getattr(character, "primary_spell_id", None),
+        getattr(character, "secondary_spell_id", None),
+    )
+    for eid in equipped_ids:
+        if not eid:
+            continue
+        obj = by_id.get(eid)
+        if obj is None:
+            continue
+        for p in getattr(obj, "passives", []) or []:
+            if getattr(p, "active", True):
+                out.append(p)
+    return out
+
+
+def effective_value(base: float, key: str, passives: list) -> tuple[float, float]:
+    """v3.8: apply every passive whose `affected_value` matches `key` on
+    top of `base`. Returns `(effective, delta)`.
+
+    Fixed passives add their `amount` directly. Percent passives apply
+    `amount%` of the base (so a -10% on a 200 max-mana gives -20).
+    Order: fixed first, then percent against the original base — keeps
+    the math commutative regardless of editor order."""
+    fixed_delta = 0.0
+    pct_delta = 0.0
+    for p in passives:
+        if getattr(p, "affected_value", None) != key:
+            continue
+        amount = float(getattr(p, "amount", 0.0) or 0.0)
+        if getattr(p, "scope", "fixed") == "percent":
+            pct_delta += base * (amount / 100.0)
+        else:
+            fixed_delta += amount
+    delta = fixed_delta + pct_delta
+    return base + delta, delta
+
+
+def effective_vitals(character: Character,
+                      weapons: Optional[list] = None,
+                      armors: Optional[list] = None,
+                      spells: Optional[list] = None
+                      ) -> dict[str, dict[str, float]]:
+    """v3.8: per-vital effective values + delta from passives.
+
+    Returns a dict keyed by 'health', 'health_max', 'stamina',
+    'stamina_max', 'mana', 'mana_max'. Each entry has:
+      raw       — the stored field value (with form_mult for *_max)
+      effective — raw + passive delta
+      delta     — passive delta only (negative = debuff, positive = buff)
+    """
+    passives = collect_active_passives(character, weapons, armors, spells)
+    out: dict[str, dict[str, float]] = {}
+    for vital in ("health", "stamina", "mana"):
+        # *_max picks up form multipliers via Character.effective_vital_max.
+        raw_max = float(character.vital_max_with_form(vital))
+        eff_max, max_delta = effective_value(raw_max, f"{vital}_max", passives)
+        out[f"{vital}_max"] = {
+            "raw": raw_max, "effective": eff_max, "delta": max_delta,
+        }
+        raw_cur = float(getattr(character, f"{vital}_current", 0) or 0)
+        eff_cur, cur_delta = effective_value(raw_cur, vital, passives)
+        out[vital] = {
+            "raw": raw_cur, "effective": eff_cur, "delta": cur_delta,
+        }
+    return out
+
+
+def derive_proficiency_view(character: Character,
+                            weapons: Optional[list] = None,
+                            armors: Optional[list] = None,
+                            spells: Optional[list] = None
+                            ) -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     lts = luck_tier_sum_for(character)
     dice = character.dice
+    passives = collect_active_passives(character, weapons, armors, spells)
     for p in PROFICIENCIES:
-        eff_sp = character.effective_sp(p)
+        # Raw = stored proficiency SP * any form multiplier (legacy
+        # "effective_sp"). Effective = raw + passive delta on f"{p}_sp".
+        raw_sp = character.effective_sp(p)
+        eff_sp, sp_delta = effective_value(raw_sp, f"{p}_sp", passives)
         bonus = dice_bonus(eff_sp, p, dice, lts)
-        throw = throw_result(eff_sp, dice, bonus)
+        raw_throw = throw_result(eff_sp, dice, bonus)
+        # Passive on throw modifies the rolled value directly.
+        eff_throw, throw_delta = effective_value(raw_throw, f"{p}_throw", passives)
         out[p] = {
             "effective_sp": eff_sp,
+            "raw_sp": raw_sp,
+            "sp_delta": sp_delta,
             "bonus": bonus,
-            "throw": throw,
-            "is_critical": is_critical(throw, eff_sp),
+            "throw": eff_throw,
+            "raw_throw": raw_throw,
+            "throw_delta": throw_delta,
+            "is_critical": is_critical(eff_throw, eff_sp),
         }
     return out
 

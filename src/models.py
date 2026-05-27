@@ -184,9 +184,13 @@ ARMOR_SLOTS = ("helmet", "chest", "gloves", "pants", "boots")
 
 
 def passive_affected_options() -> list[tuple[str, list[str]]]:
+    # v3.8: dice_bonus removed per user spec — only the raw proficiency
+    # SP and the throw result are user-facing things a passive can move.
+    # "Effective SP / Effective Throw" exist as derived views; they
+    # aren't separate dials a passive can target.
     vitals = ["health", "health_max", "stamina", "stamina_max",
               "mana", "mana_max"]
-    prof_attrs = ("throw", "dice_bonus", "sp")
+    prof_attrs = ("throw", "sp")
     profs: list[str] = []
     for p in PROFICIENCIES:
         for a in prof_attrs:

@@ -53,6 +53,15 @@ PROF_LABELS = {
 }
 
 
+def _eff_color(delta: float) -> str:
+    """v3.8: green for net buff, red for net debuff, neutral otherwise."""
+    if delta > 0.05:
+        return "#7fd194"
+    if delta < -0.05:
+        return "#f76b66"
+    return "#fafafa"
+
+
 def _no_track_spin(spin: NoWheelSpinBox) -> NoWheelSpinBox:
     """Disable keyboard tracking so valueChanged only fires on commit
     (Enter / focus loss), not on every digit typed."""
@@ -321,7 +330,7 @@ class CharacterSheet(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
 
-        self._hp_bar = VitalBar("HP", "hp")
+        self._hp_bar = VitalBar("Health", "hp")
         self._stam_bar = VitalBar("Stamina", "stamina")
         self._mana_bar = VitalBar("Mana", "mana")
         for vb in (self._hp_bar, self._stam_bar, self._mana_bar):
@@ -506,17 +515,26 @@ class CharacterSheet(QWidget):
         outer = QVBoxLayout(wrap)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        self._prof_table = QTableWidget(0, 4)
+        # v3.8: SP / Throw Result are now flanked by the passive-aware
+        # *effective* columns. "SP" / "Throw Result" stay as raw inputs
+        # / values; "Effective SP" / "Effective Throw" carry any passive
+        # modifier (green = buff, red = debuff). These are what
+        # calculations actually consume.
+        self._prof_table = QTableWidget(0, 6)
         self._prof_table.setHorizontalHeaderLabels(
-            ["Proficiency", "SP", "Dice Bonus", "Throw Result"])
+            ["Proficiency", "SP", "Effective SP", "Dice Bonus",
+             "Throw Result", "Effective Throw"])
         self._prof_table.verticalHeader().setVisible(False)
         h = self._prof_table.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self._prof_table.setColumnWidth(1, 110)
-        self._prof_table.setColumnWidth(2, 130)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self._prof_table.setColumnWidth(1, 80)
+        self._prof_table.setColumnWidth(2, 100)
+        self._prof_table.setColumnWidth(3, 100)
         self._prof_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._prof_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
 
@@ -528,7 +546,7 @@ class CharacterSheet(QWidget):
             header = QTableWidgetItem(f"-- {attr_name} (total: 0) --")
             header.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self._prof_table.setItem(row, 0, header)
-            self._prof_table.setSpan(row, 0, 1, 4)
+            self._prof_table.setSpan(row, 0, 1, 6)
             self._attr_header_items[attr_name] = header
             row += 1
             for p in (p1, p2):
@@ -541,8 +559,10 @@ class CharacterSheet(QWidget):
                     lambda v, key=p: self._set_field(f"{key}_sp", v))
                 self._sp_spins[p] = spin
                 self._prof_table.setCellWidget(row, 1, spin)
-                self._prof_table.setItem(row, 2, QTableWidgetItem("0.0"))
+                self._prof_table.setItem(row, 2, QTableWidgetItem("0"))
                 self._prof_table.setItem(row, 3, QTableWidgetItem("0.0"))
+                self._prof_table.setItem(row, 4, QTableWidgetItem("0.0"))
+                self._prof_table.setItem(row, 5, QTableWidgetItem("0.0"))
                 row += 1
         h_total = self._prof_table.verticalHeader().defaultSectionSize() * (row + 1)
         self._prof_table.setMinimumHeight(h_total)
@@ -600,7 +620,7 @@ class CharacterSheet(QWidget):
 
         grid.addWidget(QLabel("Damage Received:"), 0, 0)
         grid.addWidget(self._dmg_received_in, 0, 1)
-        grid.addWidget(QLabel("HP Loss:"), 0, 2)
+        grid.addWidget(QLabel("Health Loss:"), 0, 2)
         grid.addWidget(self._hp_loss_label, 0, 3)
         grid.addWidget(apply_hp_btn, 0, 4)
 
@@ -985,7 +1005,7 @@ class CharacterSheet(QWidget):
         self._forms_table.setHorizontalHeaderLabels([
             "Name", "Armor %", "Martial %", "Ranged %", "Stealth %",
             "Arcana %", "Perc %", "Acro %", "Lock %", "Speech %", "Luck %",
-            "HP %", "Stam %", "Mana %", "Inv max",
+            "Health %", "Stam %", "Mana %", "Inv max",
         ])
         self._forms_table.verticalHeader().setVisible(False)
         self._forms_table.horizontalHeader().setSectionResizeMode(
@@ -1190,6 +1210,22 @@ class CharacterSheet(QWidget):
                     bar.current_input.setButtonSymbols(
                         QAbstractSpinBox.ButtonSymbols.UpDownArrows)
 
+            # v3.8: push effective vitals into every bar so passives
+            # show up next to the raw values AND raise the current-cap
+            # past the stored max when a passive bumps health_max etc.
+            ev = me.effective_vitals(
+                self._char, self._state.state.weapons,
+                self._state.state.armors, self._state.state.spells)
+            self._hp_bar.set_effective(
+                ev["health"]["effective"], ev["health_max"]["effective"],
+                ev["health"]["delta"], ev["health_max"]["delta"])
+            self._stam_bar.set_effective(
+                ev["stamina"]["effective"], ev["stamina_max"]["effective"],
+                ev["stamina"]["delta"], ev["stamina_max"]["delta"])
+            self._mana_bar.set_effective(
+                ev["mana"]["effective"], ev["mana_max"]["effective"],
+                ev["mana"]["delta"], ev["mana_max"]["delta"])
+
             # v3.7.2: KP totals no longer live on the global character,
             # so there's nothing to push to the (deleted) labels here.
             # kill_point_value (bounty when killed) is still editable.
@@ -1262,8 +1298,11 @@ class CharacterSheet(QWidget):
             f"× mult={rec['global_mult']:.2f} = {rec['total']}"
         )
 
-        # Proficiency view
-        profs = me.derive_proficiency_view(self._char)
+        # Proficiency view (v3.8: pass equipped item lists so passives
+        # on weapons / armor / spells show up in effective columns).
+        profs = me.derive_proficiency_view(
+            self._char, self._state.state.weapons,
+            self._state.state.armors, self._state.state.spells)
         row = 0
         for attr_name, (p1, p2) in ATTRIBUTES.items():
             total = self._char.attribute_total(attr_name)
@@ -1271,15 +1310,29 @@ class CharacterSheet(QWidget):
                 f"-- {attr_name} (total: {total}) --")
             row += 1
             for p in (p1, p2):
-                bonus_text = f"{profs[p]['bonus']:.2f}"
-                throw_text = f"{profs[p]['throw']:.1f}"
-                if profs[p]["is_critical"]:
-                    throw_text += "  CRITICAL!"
-                self._prof_table.item(row, 2).setText(bonus_text)
-                throw_item = self._prof_table.item(row, 3)
-                throw_item.setText(throw_text)
-                color = "#f72c25" if profs[p]["is_critical"] else "#fafafa"
-                throw_item.setForeground(QBrush(QColor(color)))
+                pd = profs[p]
+                # Column 2: Effective SP, color-coded vs raw
+                eff_sp_item = self._prof_table.item(row, 2)
+                eff_sp_item.setText(f"{pd['effective_sp']:.2f}")
+                eff_sp_item.setForeground(QBrush(QColor(
+                    _eff_color(pd['sp_delta']))))
+                # Column 3: Dice Bonus (computed from effective SP).
+                self._prof_table.item(row, 3).setText(f"{pd['bonus']:.2f}")
+                # Column 4: raw throw result (no passive).
+                raw_throw_item = self._prof_table.item(row, 4)
+                raw_throw_item.setText(f"{pd['raw_throw']:.1f}")
+                raw_throw_item.setForeground(QBrush(QColor("#fafafa")))
+                # Column 5: Effective Throw, color-coded vs raw.
+                eff_throw_text = f"{pd['throw']:.1f}"
+                if pd["is_critical"]:
+                    eff_throw_text += "  CRITICAL!"
+                eff_throw_item = self._prof_table.item(row, 5)
+                eff_throw_item.setText(eff_throw_text)
+                if pd["is_critical"]:
+                    eff_throw_item.setForeground(QBrush(QColor("#f72c25")))
+                else:
+                    eff_throw_item.setForeground(QBrush(QColor(
+                        _eff_color(pd['throw_delta']))))
                 row += 1
 
         # Throw results table

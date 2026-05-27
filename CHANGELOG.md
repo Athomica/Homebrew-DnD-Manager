@@ -1,5 +1,55 @@
 # DnD Manager Changelog
 
+## v3.8 — Effective values, passives that actually count
+
+### Effective-value engine
+- New `math_engine.collect_active_passives(...)` gathers every active
+  Passive on the character plus passives on every equipped weapon,
+  shield, armor piece and castable spell.
+- New `math_engine.effective_value(base, key, passives)` aggregates the
+  matching passives over a base value. Fixed amounts add directly;
+  percent amounts apply against the original base.
+- New `math_engine.effective_vitals(...)` returns `{raw, effective,
+  delta}` per vital (`health`, `health_max`, `stamina`, `stamina_max`,
+  `mana`, `mana_max`).
+- `derive_proficiency_view` now returns `raw_sp`/`sp_delta` plus
+  `raw_throw`/`throw_delta` in addition to the existing `effective_sp`
+  and `throw`.
+
+### Proficiencies table
+- Two new columns: **Effective SP** and **Effective Throw** — what the
+  combat math actually consumes. The existing SP spinner and Throw
+  Result columns still show the raw values.
+- Effective columns are color-coded — **green when a passive net-buffs
+  the value, red when it net-debuffs**, neutral when unchanged.
+
+### Vitals
+- Each vital bar gets a `set_effective(...)` hook. When a passive
+  shifts the effective max or current, an inline `max≈N` / `cur≈N`
+  label appears next to the spinboxes in the matching color (green for
+  buff, red for debuff).
+- **Current-value cap bug fixed.** Typing a higher max in the spinbox
+  used to leave the current value pinned to the old cap (often 100).
+  The spinbox now bumps its cap whenever the typed max exceeds it,
+  AND the cap follows the *effective* max — so when a passive raises
+  health_max, the current can climb with it.
+
+### Passives
+- Removed the "dice bonus" option (per spec — only the raw proficiency
+  and the throw result are user-facing things a passive can move).
+- The affected-value dropdown now uses friendly labels — "Health",
+  "Martial proficiency", "Stealth throw" — instead of the raw model
+  keys. Stored values unchanged so old saves are still valid.
+
+### Naming
+- "HP" → **"Health"** everywhere user-facing: vital bar title,
+  conflict-strip chips (`Health↓` / `Health↓sh`), item editor (Health
+  Effect), form editor (Health %), Combat Resolution (Health Loss).
+
+### Deferred for the next pass
+- Conflict-mode pronouncement inversion (effective vital larger than
+  raw mid-combat) and bleed-per-turn forecast still to come.
+
 ## v3.7.7 — Bundle xcb runtime libs (real X11 fix)
 
 v3.7.6's `XKB_CONFIG_ROOT` was a step but didn't fix anything — the

@@ -26,8 +26,15 @@ def build_affected_combo() -> NoWheelComboBox:
     """Build a QComboBox with grouped headers for the Passive affected_value."""
     cb = NoWheelComboBox()
     model = QStandardItemModel(cb)
+    # v3.8: friendlier labels in the dropdown ("Health" instead of
+    # "health", "Martial proficiency" instead of "martial_sp"). The
+    # stored value still uses the raw key so save/load is unchanged.
+    pretty = {
+        "health": "Health", "health_max": "Health max",
+        "stamina": "Stamina", "stamina_max": "Stamina max",
+        "mana": "Mana", "mana_max": "Mana max",
+    }
     for group, items in passive_affected_options():
-        # Header (non-selectable)
         header = QStandardItem(f"— {group} —")
         header.setFlags(Qt.ItemFlag.NoItemFlags)
         bold = QFont()
@@ -35,7 +42,9 @@ def build_affected_combo() -> NoWheelComboBox:
         header.setFont(bold)
         model.appendRow(header)
         for v in items:
-            it = QStandardItem(v)
+            label = pretty.get(v) or v.replace("_sp", " proficiency").replace(
+                "_throw", " throw").replace("_", " ").capitalize()
+            it = QStandardItem(label)
             it.setData(v, Qt.ItemDataRole.UserRole)
             model.appendRow(it)
     cb.setModel(model)

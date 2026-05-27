@@ -55,12 +55,19 @@ class VitalBar(QWidget):
         self._max_input.setValue(100)
         self._max_input.setFixedWidth(80)
 
+        # v3.8: effective-vs-raw label sits next to the spinboxes; shows
+        # ›≈ N‹ in green/red when a passive shifts the effective value
+        # away from the raw stored value.
+        self._eff_lbl = QLabel("")
+        self._eff_lbl.setProperty("role", "dim")
+
         bar_row.addWidget(self._bar, 1)
         bar_row.addWidget(QLabel("cur"))
         bar_row.addWidget(self._current_input)
         if not hide_max:
             bar_row.addWidget(QLabel("max"))
             bar_row.addWidget(self._max_input)
+        bar_row.addWidget(self._eff_lbl)
 
         outer.addLayout(title_row)
         outer.addLayout(bar_row)
@@ -97,10 +104,44 @@ class VitalBar(QWidget):
             w.blockSignals(False)
         self._refresh_bar(animate=animate, prev_value=prev)
 
+    def set_effective(self, eff_current: float, eff_max: float,
+                       cur_delta: float, max_delta: float) -> None:
+        """v3.8: tell the bar what the post-passive values look like so
+        it can (a) cap the current spinbox at the effective max — fixes
+        the 'current is stuck at 100' bug when max is raised by a
+        passive — and (b) display ≈ EFF in green/red when the
+        effective differs from the raw."""
+        eff_max_i = max(1, int(round(eff_max)))
+        # Cap the current spinbox at the EFFECTIVE max — what the user
+        # can actually heal up to right now.
+        self._current_input.setMaximum(eff_max_i)
+        # Compose the inline effective label.
+        parts: list[str] = []
+        if abs(max_delta) >= 0.5:
+            color = "#7fd194" if max_delta > 0 else "#f76b66"
+            parts.append(
+                f"<span style='color:{color};'>max≈{int(round(eff_max))}</span>")
+        if abs(cur_delta) >= 0.5:
+            color = "#7fd194" if cur_delta > 0 else "#f76b66"
+            parts.append(
+                f"<span style='color:{color};'>cur≈{int(round(eff_current))}</span>")
+        if parts:
+            self._eff_lbl.setText("  ".join(parts))
+            self._eff_lbl.setTextFormat(Qt.TextFormat.RichText)
+        else:
+            self._eff_lbl.setText("")
+
     def _refresh_bar(self, *_args, animate: bool = True,
                      prev_value: int | None = None) -> None:
         cur = self._current_input.value()
         mx = max(1, self._max_input.value())
+        # v3.8: keep the current spinbox's hard cap in sync with the
+        # currently-typed max. Without this, typing a new max in the
+        # spinbox leaves the old (often 100) cap in place and the
+        # current value can't follow. set_effective() may later raise
+        # the cap further to account for passive buffs.
+        if self._current_input.maximum() < mx:
+            self._current_input.setMaximum(mx)
         if cur > mx:
             cur = mx
             self._current_input.blockSignals(True)

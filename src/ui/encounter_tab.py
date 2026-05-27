@@ -307,7 +307,7 @@ class CompactCharacterCard(QFrame):
         v.setSpacing(8)
 
         # Vitals
-        self._hp_bar = VitalBar("HP", "hp")
+        self._hp_bar = VitalBar("Health", "hp")
         self._stam_bar = VitalBar("Stamina", "stamina")
         self._mana_bar = VitalBar("Mana", "mana")
         for vb in (self._hp_bar, self._stam_bar, self._mana_bar):
@@ -367,8 +367,8 @@ class CompactCharacterCard(QFrame):
         div2 = QFrame(); div2.setFrameShape(QFrame.Shape.VLine)
         div2.setStyleSheet("background-color: #333; max-width: 1px;")
         sl.addWidget(div2)
-        sl.addWidget(_chip("HP↓", self._hploss_lbl, hp_color))
-        sl.addWidget(_chip("HP↓sh", self._sh_hploss_lbl, hp_color))
+        sl.addWidget(_chip("Health↓", self._hploss_lbl, hp_color))
+        sl.addWidget(_chip("Health↓sh", self._sh_hploss_lbl, hp_color))
         sl.addStretch(1)
         v.addWidget(strip)
 
