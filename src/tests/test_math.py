@@ -434,6 +434,51 @@ class TestEncounterSystem(unittest.TestCase):
         self.assertTrue(with_wand.can_cast_magic(weapons))
         self.assertTrue(with_wand_secondary.can_cast_magic(weapons))
 
+    def test_non_permanent_max_passive_ticks_current(self):
+        # v3.10.9: a non-permanent passive targeting a *_max key
+        # ticks on the corresponding current vital each turn,
+        # per the "non-permanent procs each turn" spec.
+        from models import Passive
+        hero = Character(name="X", role="party",
+                          health_max=200, health_current=200)
+        self.sm.state.party.append(hero)
+        _, _, inst = self.sm.add_character_to_encounter(hero)
+        self.sm.assign_to_side(inst.instance_id, "left")
+        # "Wither" -5 health_max for 2 turns → drains 5 current
+        # each tick (not a static -5 to max).
+        inst.character.passives.append(Passive(
+            name="Wither", amount=-5, scope="fixed",
+            affected_value="health_max", duration="turns:2"))
+        self.sm.change_turn(inst.instance_id, +1)
+        self.assertEqual(inst.character.health_current, 195)
+
+    def test_permanent_passive_stays_static(self):
+        # v3.10.9: a permanent passive applies via effective_value
+        # and is NOT touched by change_turn ticks. The effective max
+        # carries the +50 from turn 0 onward; ticking the turn does
+        # not double-apply.
+        from models import Passive
+        import math_engine as me
+        hero = Character(name="V", role="party",
+                          health_max=100, health_current=100)
+        self.sm.state.party.append(hero)
+        _, _, inst = self.sm.add_character_to_encounter(hero)
+        self.sm.assign_to_side(inst.instance_id, "left")
+        inst.character.passives.append(Passive(
+            name="Vigor", amount=50, scope="fixed",
+            affected_value="health_max", duration="permanent"))
+        ev_before = me.effective_vitals(
+            inst.character, self.sm.state.weapons, self.sm.state.armors,
+            self.sm.state.spells, self.sm.state.items)
+        self.assertEqual(ev_before["health_max"]["effective"], 150)
+        self.sm.change_turn(inst.instance_id, +1)
+        ev_after = me.effective_vitals(
+            inst.character, self.sm.state.weapons, self.sm.state.armors,
+            self.sm.state.spells, self.sm.state.items)
+        self.assertEqual(ev_after["health_max"]["effective"], 150)
+        # Current health unchanged — permanent passive doesn't tick.
+        self.assertEqual(inst.character.health_current, 100)
+
     def test_turn_advance_expires_short_passive(self):
         # v3.10.4: a "Single use" passive lives for the current turn
         # only — advancing one turn must drop it from the list.

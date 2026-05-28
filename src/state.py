@@ -1204,23 +1204,46 @@ class StateManager(QObject):
                     if p.turns_remaining > 0:
                         kept.append(p)
                 char.passives = kept
-                # 3. Apply DoT/HoT to current vitals.
+                # 3. Apply DoT/HoT each turn for non-permanent passives.
+                # v3.10.9: max-vital passives also tick on the
+                # corresponding current vital — per the "non-permanent
+                # procs each turn" spec a Bleed -5 health_max for 3
+                # turns drains 5 current health per turn, same as a
+                # Bleed -5 health. Proficiency passives still don't
+                # tick (they have no "current" counterpart) — they
+                # behaved as temporary static modifiers up to v3.10.8
+                # and as nothing at all from v3.10.9 onward (the
+                # effective_value skip dropped them too); a future
+                # release can re-add the proficiency tick model if
+                # the user wants it.
+                vital_keys = ("health", "stamina", "mana",
+                               "health_max", "stamina_max", "mana_max")
                 for p in char.passives:
                     if not getattr(p, "active", True):
+                        continue
+                    # v3.10.9: permanent passives don't tick — they
+                    # apply statically via effective_value. Without
+                    # this guard a permanent +50 health_max passive
+                    # would also bump health_current by 50 every turn,
+                    # which is the opposite of "procs once and stays
+                    # effective".
+                    if int(getattr(p, "turns_remaining", -1) or -1) < 0:
                         continue
                     if getattr(p, "turns_remaining", -1) == 0:
                         continue  # already expired (shouldn't be here)
                     av = getattr(p, "affected_value", "") or ""
-                    if av not in ("health", "stamina", "mana"):
+                    if av not in vital_keys:
                         continue
-                    cur_attr = f"{av}_current"
+                    # Route *_max to the corresponding current vital.
+                    base_vital = av[:-4] if av.endswith("_max") else av
+                    cur_attr = f"{base_vital}_current"
                     cur = float(getattr(char, cur_attr, 0) or 0)
                     amount = float(getattr(p, "amount", 0) or 0)
                     if getattr(p, "scope", "fixed") == "percent":
                         delta_v = cur * (amount / 100.0)
                     else:
                         delta_v = amount
-                    eff_max = self._effective_max(char, av)
+                    eff_max = self._effective_max(char, base_vital)
                     new = max(0, min(eff_max, cur + delta_v))
                     setattr(char, cur_attr, int(round(new)))
                 inst.turn += 1

@@ -484,7 +484,12 @@ def per_turn_forecast(character: Character, vital: str,
             continue
         if getattr(p, "turns_remaining", -1) == 0:
             continue
-        if getattr(p, "affected_value", None) != vital:
+        # v3.10.9: match BOTH the current-vital key and its `_max`
+        # partner. Non-permanent passives targeting `health_max`
+        # tick on `health_current` (and similarly for stamina /
+        # mana), per the "non-permanent procs each turn" spec.
+        av = getattr(p, "affected_value", None)
+        if av not in (vital, f"{vital}_max"):
             continue
         amount = float(getattr(p, "amount", 0.0) or 0.0)
         if getattr(p, "scope", "fixed") == "percent":
@@ -516,8 +521,17 @@ def effective_value(base: float, key: str, passives: list) -> tuple[float, float
     for p in passives:
         if getattr(p, "affected_value", None) != key:
             continue
+        # v3.10.4 / v3.10.9: per the user's "non-permanent procs each
+        # turn" spec, ONLY permanent (and manual) passives apply
+        # statically here — non-permanent ones tick on each
+        # change_turn(+1) instead. Permanent is signalled by
+        # turns_remaining < 0 (set by Passive.__post_init__ from the
+        # duration field).
+        if int(getattr(p, "turns_remaining", -1) or -1) >= 0:
+            continue
         # Passives targeting a current vital tick on turn-advance —
-        # they don't contribute statically here.
+        # they don't contribute statically here either (they're
+        # already filtered above, but keep the safety net).
         if key in ("health", "stamina", "mana"):
             continue
         amount = float(getattr(p, "amount", 0.0) or 0.0)

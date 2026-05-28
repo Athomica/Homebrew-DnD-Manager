@@ -1,5 +1,36 @@
 # DnD Manager Changelog
 
+## v3.10.9 — Non-permanent procs each turn; permanent stays static
+
+Tightened to the user's spec:
+
+- **Non-permanent passive** (Single use / For N turns) **procs each
+  turn**. Its `amount` applies to the corresponding current vital
+  on every `change_turn(+1)`. Targets `health_max` / `stamina_max` /
+  `mana_max` now route to the matching current vital — so a
+  `Wither −5 health_max for 2 turns` drains 5 current health per
+  turn, identical to a `Bleed −5 health for 2 turns`.
+- **Permanent / manual passive** **procs once** (when added) and
+  stays effective until removed. Applied statically via
+  `effective_value`. The `change_turn` tick loop now skips
+  permanent passives (`turns_remaining < 0`) so a permanent
+  `+50 health_max` no longer doubles up by also bumping
+  `health_current` each turn.
+
+`effective_value` only sums permanent passives now — non-permanent
+ones contribute through the tick, not through the static layer.
+`per_turn_forecast` matches both the current key and its `_max`
+partner, so the "next turn ±N" chip beside the vital bar surfaces
+the upcoming tick.
+
+Two new regression tests:
+
+- `test_non_permanent_max_passive_ticks_current` — `Wither −5
+  health_max` drains current health on tick.
+- `test_permanent_passive_stays_static` — `Vigor +50 health_max`
+  shows up in effective max but does NOT bump current health on
+  `change_turn(+1)`.
+
 ## v3.10.8 — Cast / Arcana gated on staff or innate caster
 
 The conflict panel let any character pick Cast or Arcana even if
