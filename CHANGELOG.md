@@ -1,5 +1,25 @@
 # DnD Manager Changelog
 
+## v3.10.5 — Hydrate passive lists on load
+
+Two crash modes reported, both same root cause: passive lists nested
+inside loaded items / weapons were `list[dict]` after a save round-trip
+because the hydrators didn't recursively convert them.
+
+- **"Resolve failed: 'dict' object has no attribute 'id'"** —
+  `_apply_weapon_inflictions` did `getattr(p, "id", None)` on what it
+  expected to be a `Passive` but was a dict; the conflict resolver
+  blew up the moment a weapon hit anything.
+- **"'dict' object has no attribute 'active'"** — picking an item or
+  weapon in the Lists tab called `PassiveListEditor.load(p.passives)`
+  → `_refresh_list` accessed `p.active`.
+
+Fix: `_hydrate_weapon` now also hydrates `inflict_passives` (v3.9
+field). `_hydrate_item` was using the generic `_from_dataclass`
+which doesn't recurse into nested lists — replaced with an
+explicit hydrator that converts the `passives` list. Verified by
+save → reload → assert `type(weapon.passives[0]) is Passive`.
+
 ## v3.10.4 — Turn ticks + passive snapshots; "per turn" checkbox gone
 
 ### "per turn" checkbox removed

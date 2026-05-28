@@ -74,8 +74,15 @@ def _hydrate_passive(d: dict) -> Passive:
 
 def _hydrate_weapon(d: dict) -> Weapon:
     fields = {f.name for f in dataclasses.fields(Weapon)}
-    kwargs = {k: v for k, v in d.items() if k in fields and k != "passives"}
+    # v3.10.5: also hydrate `inflict_passives` (v3.9). Without this,
+    # loaded saves carry raw dicts under that key and the conflict
+    # resolver's _apply_weapon_inflictions blows up the moment a
+    # weapon hits anything ("'dict' object has no attribute 'id'").
+    kwargs = {k: v for k, v in d.items()
+              if k in fields and k not in ("passives", "inflict_passives")}
     kwargs["passives"] = [_hydrate_passive(p) for p in d.get("passives", [])]
+    kwargs["inflict_passives"] = [
+        _hydrate_passive(p) for p in d.get("inflict_passives", [])]
     return Weapon(**kwargs)
 
 
@@ -98,7 +105,14 @@ def _hydrate_spell(d: dict) -> Spell:
 
 
 def _hydrate_item(d: dict) -> Item:
-    return _from_dataclass(Item, d)
+    # v3.10.5: items got passives in v3.9. Hydrate the nested list so
+    # PassiveListEditor / collect_active_passives see Passive
+    # objects, not raw dicts.
+    fields = {f.name for f in dataclasses.fields(Item)}
+    kwargs = {k: v for k, v in d.items()
+              if k in fields and k != "passives"}
+    kwargs["passives"] = [_hydrate_passive(p) for p in d.get("passives", [])]
+    return Item(**kwargs)
 
 
 def _hydrate_form(d: dict) -> Form:
