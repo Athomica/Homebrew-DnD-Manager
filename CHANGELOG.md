@@ -1,5 +1,64 @@
 # DnD Manager Changelog
 
+## v3.10.2 — Equipment dedupe; template orphan fix; encounter spell mgr; live outcome row
+
+### Equipment passives apply once per item
+`collect_active_passives` deduplicates by item id while walking
+equipped slots. A hammer plugged into both `primary_weapon_id` and
+`shield_id` (a hammer used as a shield is still ONE hammer) now
+applies its passives once, not twice. Two *different* hammers with
+the same name in primary + secondary still apply twice — they're
+distinct ids.
+
+### Template-spawn bug fixed
+Adding a template to a side used to create TWO instances — one
+on the side, one "roster marker" that hid in `enc.instances`. The
+visible numbers jumped to `Goblin #2, #4, #6, …` and, worse,
+`end_encounter` promoted the orphan `#1, #3, #5, …` markers to
+unique characters even though they never fought.
+
+- `assign_to_side` no longer duplicates a template instance. The
+  single instance created by `add_character_to_encounter` is moved
+  directly onto the side. The TEMPLATE character itself stays in
+  the Lists tab and the roster keeps offering it for further
+  spawns.
+- Defensive guard in `end_encounter`: any instance whose id isn't
+  in `left/right_participant_ids` + `left/right_deceased_ids` is
+  skipped entirely. No more phantom uniques.
+
+### Encounter tab: add / remove known spells
+The Gear → Equipment tab gains a "Known spells" group: a list of
+the character's current `spell_ids`, an "Add from list" combobox
+that lists every spell they don't yet know (filtered by
+`arcana_level ≤ arcana_sp`), and `+ Add` / `− Remove` buttons.
+Same mechanic as on the global Character Sheet, now available
+without leaving the encounter view.
+
+### Conflict outcome row shows real numbers for every action
+Previously the Dealt / Recv / SP / MP / HP row showed zeros unless
+the action was a plain physical attack. Now:
+
+- **Attack/Arcana** uses the picked destruction spell's cost AND
+  damage (no more weapon cost contamination from v3.10).
+- **Cast** uses the picked Cast spell's cost. Damage = 0 for
+  non-destruction spells (correct — their effects land via
+  `_apply_spell_effects` at resolve).
+- **Dodge** displays the stamina cost the dodger will pay:
+  `ceil(stamina_max / (6 + dodge_value * 4))` — same formula
+  `receive()` uses on resolve.
+- **Shift** keeps the per-form mana + health cost from v3.9.7.
+
+Changing the picked spell / form / atk type or the action itself
+recomputes the row live (it's wired through the same
+`encounter_changed` signal that refreshes the panel).
+
+### Tests
+- Updated `test_end_encounter_promotes_template_survivors` to
+  assign the template to a side first (since unassigned templates
+  are now correctly skipped).
+- New `test_end_encounter_skips_orphan_template_instance` covers
+  the phantom-Goblin regression.
+
 ## v3.10.1 — Spell-only magic; animations gone
 
 ### Arcana / Cast read spell data only

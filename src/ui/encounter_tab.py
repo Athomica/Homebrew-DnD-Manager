@@ -549,7 +549,50 @@ class CompactCharacterCard(QFrame):
         self._armor_total_lbl.setProperty("role", "big")
         f.addRow("Total armor:", self._armor_total_lbl)
 
+        # v3.10.2: known-spells manager. The user wanted to add/remove
+        # spells the character knows from inside the encounter tab too
+        # (previously only the global Character Sheet could do this).
+        from PyQt6.QtWidgets import QListWidget as _QLW
+        known_grp = QGroupBox("Known spells")
+        kg_l = QVBoxLayout(known_grp); kg_l.setSpacing(4)
+        self._known_spells_list = _QLW()
+        self._known_spells_list.setMaximumHeight(120)
+        kg_l.addWidget(self._known_spells_list)
+        add_row = QHBoxLayout(); add_row.setSpacing(6)
+        add_row.addWidget(QLabel("Add from list:"))
+        self._known_add_combo = NoWheelComboBox()
+        add_row.addWidget(self._known_add_combo, 1)
+        self._known_add_btn = QPushButton("+ Add")
+        self._known_add_btn.clicked.connect(self._on_known_spell_add)
+        add_row.addWidget(self._known_add_btn)
+        self._known_rm_btn = QPushButton("− Remove")
+        self._known_rm_btn.setProperty("role", "danger")
+        self._known_rm_btn.clicked.connect(self._on_known_spell_remove)
+        add_row.addWidget(self._known_rm_btn)
+        kg_l.addLayout(add_row)
+        f.addRow(known_grp)
+
         return tab
+
+    def _on_known_spell_add(self) -> None:
+        sid = self._known_add_combo.currentData()
+        if not sid:
+            return
+        char = self._instance.character
+        if sid in char.spell_ids:
+            return
+        char.spell_ids.append(sid)
+        self._state.character_changed.emit(char.id)
+
+    def _on_known_spell_remove(self) -> None:
+        row = self._known_spells_list.currentRow()
+        if row < 0:
+            return
+        char = self._instance.character
+        if row >= len(char.spell_ids):
+            return
+        del char.spell_ids[row]
+        self._state.character_changed.emit(char.id)
 
     def _on_equip_change(self, slot: str, combo: NoWheelComboBox) -> None:
         # v3.4.2: deferred for the same Qt-popup-still-open reason as
@@ -972,6 +1015,28 @@ class CompactCharacterCard(QFrame):
             self._using_primary_chk.blockSignals(True)
             self._using_primary_chk.setChecked(char.using_primary)
             self._using_primary_chk.blockSignals(False)
+        # v3.10.2: known-spells widgets. List shows currently-known
+        # spells (with their school + level); add-combo lists spells
+        # the character does NOT yet know, filtered by arcana_level.
+        if hasattr(self, "_known_spells_list"):
+            spells_by_id = {s.id: s for s in self._state.state.spells}
+            self._known_spells_list.clear()
+            for sid in char.spell_ids:
+                s = spells_by_id.get(sid)
+                if s is None:
+                    continue
+                self._known_spells_list.addItem(
+                    f"{s.name}  ({s.school}, lvl {s.arcana_level})")
+            self._known_add_combo.blockSignals(True)
+            self._known_add_combo.clear()
+            for s in self._state.state.spells:
+                if s.id in char.spell_ids:
+                    continue
+                if s.arcana_level > char.arcana_sp:
+                    continue
+                self._known_add_combo.addItem(
+                    f"{s.name}  ({s.school}, lvl {s.arcana_level})", s.id)
+            self._known_add_combo.blockSignals(False)
 
     def _refresh_stats(self) -> None:
         # v3.7: stats section is skipped during conflict — no widgets to refresh.
@@ -1744,23 +1809,54 @@ class ConflictPanel(QGroupBox):
             stam_cost = mana_cost = 0
             atk_val = 0.0
             side_data_extra_health_cost = 0
+            # v3.10.2: helpers to look up the per-side conflict-panel pick.
+            def _pw():
+                wid = getattr(enc, f"{side}_action_weapon_id", None)
+                return next((w for w in self._state.state.weapons
+                              if w.id == wid), None) if wid else None
+            def _ps(field):
+                sid = getattr(enc, f"{side}_{field}", None)
+                return next((s for s in self._state.state.spells
+                              if s.id == sid), None) if sid else None
             if cur_action == "attack":
-                atk_val = self._state._outgoing_damage(inst.character, sel)
-                stam_cost, mana_cost = self._state._action_costs(inst.character, sel)
-            elif cur_action == "cast":
-                spell = self._state._equipped_spell(inst.character)
-                if spell is None and inst.character.can_cast_without_staff:
-                    if inst.character.selected_spell_id:
-                        spell = next((s for s in self._state.state.spells
-                                      if s.id == inst.character.selected_spell_id), None)
-                if spell is not None and getattr(spell, "school", "Destruction") == "Destruction":
-                    atk_val = self._state._outgoing_damage(inst.character, "arcana")
+                w_over = _pw() if sel != "arcana" else None
+                sp_over = _ps("action_spell_id") if sel == "arcana" else None
+                atk_val = self._state._outgoing_damage(
+                    inst.character, sel,
+                    weapon_override=w_over, spell_override=sp_over)
                 stam_cost, mana_cost = self._state._action_costs(
-                    inst.character, "arcana")
+                    inst.character, sel,
+                    weapon_override=w_over, spell_override=sp_over)
+            elif cur_action == "cast":
+                # v3.10.2: read the picked Cast spell from the conflict
+                # panel. Non-destruction casts deal 0 damage by design
+                # (their effects land via _apply_spell_effects on
+                # resolve); destruction casts feed arcana ATK.
+                spell = _ps("cast_spell_id") or self._state._equipped_spell(inst.character)
+                if spell is not None and getattr(spell, "school", "Destruction") == "Destruction":
+                    atk_val = self._state._outgoing_damage(
+                        inst.character, "arcana", spell_override=spell)
+                stam_cost, mana_cost = self._state._action_costs(
+                    inst.character, "arcana", spell_override=spell)
             elif cur_action == "block":
                 shield = inst.character.get_shield(self._state.state.weapons)
                 if shield and use_shield:
                     stam_cost = shield.block_cost
+            elif cur_action == "dodge":
+                # v3.10.2: dodge stamina cost depends on the dodger's
+                # stamina_max and their dodge value:
+                #   cost = ceil(stamina_max / (6 + dodge_v * 4))
+                # The cost is paid REGARDLESS of dodge success (per
+                # the same formula in resolve_conflict's receive()).
+                import math as _math
+                cb = me.derive_combat_view(
+                    inst.character, self._state.state.weapons,
+                    self._state.state.armors, self._state.state.items,
+                    spell=self._state._equipped_spell(inst.character))
+                dv = cb["dodge"]
+                denom = 6 + dv * 4
+                stam_cost = (_math.ceil(inst.character.stamina_max / denom)
+                              if denom > 0 else 0)
             elif cur_action == "shift":
                 # v3.9.7: shift cost is per-form (mana, health, or both)
                 # — read from the pending form's enter_mana_cost /

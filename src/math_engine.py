@@ -358,9 +358,17 @@ def collect_active_passives(character: Character,
         getattr(character, "primary_spell_id", None),
         getattr(character, "secondary_spell_id", None),
     )
+    # v3.10.2: dedupe by item id — the SAME hammer plugged into both
+    # primary_weapon_id and shield_id (because it can be used as a
+    # shield too) is still ONE hammer. Its passives should apply
+    # once, not once per slot. Two DIFFERENT hammers with the same
+    # name in primary + secondary are still two distinct entries (by
+    # id) and apply twice — which is correct.
+    seen_ids: set = set()
     for eid in equipped_ids:
-        if not eid:
+        if not eid or eid in seen_ids:
             continue
+        seen_ids.add(eid)
         obj = by_id.get(eid)
         if obj is None:
             continue

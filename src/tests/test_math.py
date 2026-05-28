@@ -363,16 +363,34 @@ class TestEncounterSystem(unittest.TestCase):
         self.assertTrue(ok4)
 
     def test_end_encounter_promotes_template_survivors(self):
+        # v3.10.2: only template instances ASSIGNED to a side get
+        # promoted at end_encounter — unassigned templates are
+        # orphans and skipped.
         goblin = Character(name="Goblin", role="mob", is_template=True,
                            health_max=50)
         self.sm.state.mobs.append(goblin)
-        _, _, _ = self.sm.add_character_to_encounter(goblin)
+        _, _, inst = self.sm.add_character_to_encounter(goblin)
+        self.sm.assign_to_side(inst.instance_id, "left")
         before = len(self.sm.state.mobs)
         self.sm.end_encounter()
         # New unique mob should have been added (template survivor)
         self.assertEqual(len(self.sm.state.mobs), before + 1)
         new_one = self.sm.state.mobs[-1]
         self.assertFalse(new_one.is_template)
+
+    def test_end_encounter_skips_orphan_template_instance(self):
+        # v3.10.2: a template added but NEVER assigned must not be
+        # promoted to a unique character. Prevents the "phantom
+        # Goblin #1" bug that appeared when the user spawned a
+        # template and the assign-step duplicated the instance.
+        goblin = Character(name="Goblin", role="mob", is_template=True,
+                           health_max=50)
+        self.sm.state.mobs.append(goblin)
+        self.sm.add_character_to_encounter(goblin)
+        before = len(self.sm.state.mobs)
+        self.sm.end_encounter()
+        self.assertEqual(len(self.sm.state.mobs), before,
+                          "Orphan template should not be promoted to unique")
 
 
 if __name__ == "__main__":

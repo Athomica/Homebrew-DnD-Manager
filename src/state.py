@@ -889,10 +889,19 @@ class StateManager(QObject):
 
     # -- v3.2 participant assignment ---------------------------------------
     def assign_to_side(self, instance_id: str, side: str) -> tuple[bool, str]:
-        """Assign a roster instance to 'left' or 'right'. For uniques the
-        instance is moved out of the roster (no longer assignable). For
-        template instances we duplicate so the template stays in the
-        roster for further use."""
+        """v3.10.2: assign a roster instance to 'left' or 'right'.
+
+        For BOTH uniques and template instances the same single
+        instance is moved onto the side. Previously template-instance
+        assignment duplicated the instance (one stayed as a "roster
+        marker", a clone went onto the side). That produced two
+        side-effects: the visible numbering jumped to 2, 4, 6, … AND
+        the leftover roster marker got promoted to a new unique at
+        end_encounter even though it never fought. The template
+        character itself (the source) stays in the global Lists tab so
+        the roster keeps offering it for additional spawns; we don't
+        need a per-encounter marker for that.
+        """
         enc = self.state.active_encounter
         if enc is None:
             return False, "no active encounter"
@@ -901,29 +910,12 @@ class StateManager(QObject):
         inst = self.get_instance(instance_id)
         if inst is None or inst.is_in_bin:
             return False, "instance not available"
-        # If already on a side, this is a no-op
         if (instance_id in enc.left_participant_ids
                 or instance_id in enc.right_participant_ids):
             return False, "already assigned"
-
         target_list = (enc.left_participant_ids if side == "left"
                        else enc.right_participant_ids)
-        if inst.is_template_instance:
-            # Duplicate the template instance so the roster keeps the original.
-            new_inst = copy.deepcopy(inst)
-            new_inst.instance_id = new_id("ei")
-            new_inst.character = copy.deepcopy(inst.character)
-            new_inst.character.id = new_id("c")
-            n = sum(1 for i in enc.instances
-                    if i.source_character_id == inst.source_character_id
-                    and not i.is_in_bin) + 1
-            src_name = new_inst.character.name.rsplit(" #", 1)[0]
-            new_inst.character.name = f"{src_name} #{n}"
-            new_inst.dice_history = []
-            enc.instances.append(new_inst)
-            target_list.append(new_inst.instance_id)
-        else:
-            target_list.append(instance_id)
+        target_list.append(instance_id)
         self.encounter_changed.emit()
         return True, "ok"
 
@@ -1752,8 +1744,20 @@ class StateManager(QObject):
         # an end-of-encounter summary dialog instead of just a one-line
         # status message. Captured BEFORE end_encounter clears state.
         summary_rows: list[dict] = []
+        # v3.10.2: pre-compute the set of instance_ids that actually
+        # participated (assigned to a side OR died on a side). Any
+        # encounter instance not in this set is an orphan and gets
+        # skipped entirely — defends against any future regression
+        # that leaves dangling template instances around.
+        participating = set(
+            enc.left_participant_ids + enc.right_participant_ids
+            + enc.left_deceased_ids + enc.right_deceased_ids)
         for inst in enc.instances:
             if inst.is_in_bin:
+                continue
+            if inst.instance_id not in participating:
+                # Orphan template instance that never made it onto a
+                # side. Skip — don't promote to a unique character.
                 continue
             inst_char = inst.character
             alive = (inst_char.health_current > 0 and not inst_char.is_deceased)
