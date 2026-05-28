@@ -1,5 +1,52 @@
 # DnD Manager Changelog
 
+## v3.9.7 — Per-form shift cost + forms UX overhaul
+
+### Health potion: another layer of defense
+v3.9.6 already reordered set_effective/set_values, but in case there
+are call sites I missed, `set_values` now also bumps the spinbox cap
+to at least the `current` being written. So even if a fresh card
+construction hits set_values FIRST without prior set_effective, an
+80→120 heal can't be clamped back to 100.
+
+### Form shift cost is per-form (and can include health)
+Forms used to all cost 100 mana to enter, hard-coded. v3.9.7:
+- Form gets two new fields: `enter_mana_cost` and `enter_health_cost`.
+- `Form.maintain_cost` is **gone** (it wasn't read anywhere).
+- Legacy saves that had `mana_to_enter` are migrated into
+  `enter_mana_cost` at load time.
+- `StateManager.form_shift_cost(form)` returns `(mana, health)`.
+- `set_active_form` deducts both costs and refuses the shift if
+  either pool is too low — error message tells the user which.
+
+### Global Character Sheet — Forms section
+- Removed "Maintain cost" field.
+- "Mana to enter" replaced by **two structured spinboxes**:
+  "Mana cost to shift in" and "Health cost to shift in". Either can
+  be zero (so a free form is possible).
+
+### Compact card — Forms tab streamlined
+- **Outside conflict**: a clear "Shift to: [Form ▼]  ▶ Shift Now"
+  row. The button's tooltip shows the cost about to be paid. The
+  small list below is a read-only context list.
+- **Inside conflict**: shows ONLY the currently active form — the
+  active-form name as a green badge, plus a tight read-out of every
+  non-neutral multiplier (`MAR ×2.00`, `STH ×0.50` …). No picker, no
+  list. A hint reminds the user that mid-conflict shifts go through
+  the Shift action in the conflict panel.
+
+### Conflict resolution shows the form's actual cost
+- The "Shift to: [form]" picker in the action panel now displays the
+  selected form's cost as a colored chip next to the dropdown
+  (`· 50 MP + 10 HP` for a Wolf form).
+- The per-side outcome row gains a `−10 HP` chip when the chosen
+  form has a health cost, alongside the `−SP` / `−MP` chips.
+
+### Deferred
+- The duplicate "player view" window is a substantial standalone
+  feature; landing it in the same release would have meant rushing
+  it. Booked for the next round.
+
 ## v3.9.6 — Heal-past-base actually displays
 
 v3.9.5 routed the heal math through `_effective_max` — so `state.use_item_in_conflict`

@@ -102,6 +102,13 @@ def _hydrate_item(d: dict) -> Item:
 
 
 def _hydrate_form(d: dict) -> Form:
+    # v3.9.7: migrate legacy `mana_to_enter` -> `enter_mana_cost`,
+    # drop `maintain_cost`. Both old fields stay readable so saves
+    # from earlier versions hydrate cleanly.
+    d = dict(d)
+    if "enter_mana_cost" not in d and "mana_to_enter" in d:
+        d["enter_mana_cost"] = d["mana_to_enter"]
+    d.pop("maintain_cost", None)
     return _from_dataclass(Form, d)
 
 
@@ -644,29 +651,48 @@ class StateManager(QObject):
                        old_value=old, new_value=character.health_current)
         self.character_changed.emit(character.id)
 
-    # v3.4.5: shapeshifting always costs 100 mana, per user spec.
+    # v3.4.5: shapeshifting used to always cost 100 mana. As of v3.9.7
+    # the cost is per-form and can be mana, health, both, or nothing,
+    # taken from the target Form's enter_mana_cost / enter_health_cost
+    # fields. Kept as a fallback default for legacy forms that were
+    # saved with a zero mana_to_enter (i.e. no explicit cost set).
     SHAPESHIFT_MANA_COST = 100
+
+    @staticmethod
+    def form_shift_cost(form: Optional["Form"]) -> tuple[int, int]:
+        """v3.9.7: (mana_cost, health_cost) for shifting INTO this form."""
+        if form is None:
+            return (0, 0)
+        return (int(round(getattr(form, "enter_mana_cost", 0) or 0)),
+                int(round(getattr(form, "enter_health_cost", 0) or 0)))
 
     def set_active_form(self, character: Character, form_id: Optional[str],
                           pay_mana: bool = True) -> tuple[bool, str]:
-        """v3.4.5: changing form costs 100 mana. Returns (ok, message).
-        Pass pay_mana=False to skip the mana check/deduction (used when
-        applying state at load time, or for the initial form selection)."""
+        """v3.9.7: changing form costs whatever the target form specifies
+        (mana, health, both, or nothing). Returns (ok, message). Pass
+        `pay_mana=False` to skip the cost check (used at load time and
+        for default-form initialization)."""
         old = character.active_form_id
-        # No mana cost if we're already in this form, or if we're un-shifting
-        # (back to (none)).
-        if pay_mana and form_id and form_id != old:
-            if character.mana_current < self.SHAPESHIFT_MANA_COST:
-                return False, (
-                    f"Not enough mana to shapeshift "
-                    f"({character.mana_current} / {self.SHAPESHIFT_MANA_COST}).")
-            character.mana_current -= self.SHAPESHIFT_MANA_COST
-        character.active_form_id = form_id
-        name = "(none)"
+        # No cost if we're already in this form, or unshifting to (none).
+        target_form = None
         if form_id:
             for f in character.forms:
                 if f.id == form_id:
-                    name = f.name
+                    target_form = f; break
+        if pay_mana and form_id and form_id != old:
+            mana_cost, health_cost = self.form_shift_cost(target_form)
+            if mana_cost > character.mana_current:
+                return False, (
+                    f"Not enough mana to shift "
+                    f"({character.mana_current} / {mana_cost}).")
+            if health_cost > character.health_current:
+                return False, (
+                    f"Not enough health to shift "
+                    f"({character.health_current} / {health_cost}).")
+            character.mana_current -= mana_cost
+            character.health_current -= health_cost
+        character.active_form_id = form_id
+        name = target_form.name if target_form else "(none)"
         self.log_event("form_changed",
                        f"{character.name} switched form to '{name}'",
                        character_id=character.id,

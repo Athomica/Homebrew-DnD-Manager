@@ -98,22 +98,21 @@ class VitalBar(QWidget):
             else NoWheelSpinBox.ButtonSymbols.UpDownArrows)
 
     def set_values(self, current: int, maximum: int, animate: bool = True) -> None:
-        # v3.9.6: previously set_values forced the current spinbox's
-        # ceiling down to the RAW max — so when set_effective later
-        # bumped the cap to 200, any over-raw-max current was already
-        # clamped to 100. Order of calls in the refresh path:
-        #   1. set_values(80, 100)  -> cap drops to 100
-        #   2. set_effective(... eff_max=200 ...) -> cap goes back to 200
-        # …but the spinbox value had already been clamped to 100.
-        # Result: a +50 health potion on a buffed character stayed at
-        # 100 instead of 120. Fix: the current spinbox's cap is the
-        # MAX of the raw maximum and any cached effective max from a
-        # prior set_effective call. We never SHRINK the cap here —
-        # set_effective owns shrinking when a buff is removed.
+        # v3.9.6/v3.9.7: the current spinbox cap is the MAX of:
+        #   - the raw maximum being set,
+        #   - the cached effective max from any prior set_effective call,
+        #   - the current value being written (if larger than both).
+        # The last clause guards against the refresh-order race: even if
+        # set_effective hasn't been called yet this refresh, a heal that
+        # bumped current_health to 120 mustn't be clamped to the 100 raw
+        # max. The cap will be tightened later by set_effective if
+        # warranted.
         for w in (self._current_input, self._max_input):
             w.blockSignals(True)
         self._max_input.setValue(maximum)
-        cap = max(int(maximum), int(getattr(self, "_eff_max_clamp", 0)), 1)
+        cap = max(int(maximum),
+                   int(getattr(self, "_eff_max_clamp", 0)),
+                   int(current), 1)
         self._current_input.setMaximum(cap)
         prev = self._current_input.value()
         self._current_input.setValue(current)

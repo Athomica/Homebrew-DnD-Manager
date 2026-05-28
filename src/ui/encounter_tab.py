@@ -730,64 +730,108 @@ class CompactCharacterCard(QFrame):
 
     # -- tab: Forms --------------------------------------------------
     def _build_forms_tab(self) -> None:
+        """v3.9.7: streamlined forms tab in the encounter view.
+        - Outside conflict: dropdown to pick a form + a single
+          prominent "▶ Shift Now" button. No editing of forms here
+          (that lives on the global character sheet, which is good).
+        - Inside conflict: show ONLY the currently active form's name
+          + a compact read-out of its multipliers; shifting happens
+          via the Shift action in the conflict resolution panel.
+        """
         tab = QWidget()
         v = QVBoxLayout(tab)
-        v.setContentsMargins(6, 8, 6, 6); v.setSpacing(6)
+        v.setContentsMargins(6, 8, 6, 6); v.setSpacing(8)
         char = self._instance.character
 
-        top = QHBoxLayout()
+        # Header line: shapeshifter checkbox (only visible outside conflict)
+        # and a friendly "Currently in" label.
+        head = QHBoxLayout()
         self._shifter_chk = QCheckBox("Shapeshifter")
         self._shifter_chk.setChecked(char.is_shapeshifter)
         self._shifter_chk.toggled.connect(
             lambda val: self._set_field("is_shapeshifter", val))
-        top.addWidget(self._shifter_chk)
-        top.addStretch(1)
-        top.addWidget(QLabel("Active form:"))
+        self._shifter_chk.setVisible(not self._in_conflict)
+        head.addWidget(self._shifter_chk)
+        head.addStretch(1)
+        self._active_form_lbl = QLabel("")
+        self._active_form_lbl.setTextFormat(Qt.TextFormat.RichText)
+        head.addWidget(self._active_form_lbl)
+        v.addLayout(head)
+
+        if self._in_conflict:
+            # Active-form-only read-out + a hint about how to shift.
+            self._form_active_info = QLabel("")
+            self._form_active_info.setWordWrap(True)
+            self._form_active_info.setStyleSheet(
+                "padding: 6px; background-color: #181818; border-radius: 4px;")
+            v.addWidget(self._form_active_info)
+            hint = QLabel(
+                "<span style='color:#888;'>To change form, pick the "
+                "<b>🔄 Shift</b> action below in the conflict panel.</span>")
+            hint.setTextFormat(Qt.TextFormat.RichText)
+            hint.setWordWrap(True)
+            v.addWidget(hint)
+            # Keep the legacy widgets around as hidden no-op shims so
+            # other code (_on_active_form_changed, _refresh_forms) can
+            # still poke at them without AttributeError.
+            self._form_combo = NoWheelComboBox(); self._form_combo.setVisible(False)
+            self._forms_list = QListWidget(); self._forms_list.setVisible(False)
+            v.addStretch(1)
+            return tab
+
+        # Outside conflict: prominent shift control.
+        shift_row = QHBoxLayout(); shift_row.setSpacing(8)
+        shift_row.addWidget(QLabel("Shift to:"))
         self._form_combo = NoWheelComboBox()
         self._form_combo.currentIndexChanged.connect(self._on_active_form_changed)
-        top.addWidget(self._form_combo, 1)
-        v.addLayout(top)
+        shift_row.addWidget(self._form_combo, 1)
+        self._shift_now_btn = QPushButton("▶ Shift Now")
+        self._shift_now_btn.setProperty("role", "primary")
+        self._shift_now_btn.setToolTip(
+            "Pay this form's enter cost (mana / health) and shift.")
+        self._shift_now_btn.clicked.connect(self._on_shift_now)
+        shift_row.addWidget(self._shift_now_btn)
+        v.addLayout(shift_row)
 
+        # Tiny form list (read-only) below — purely for context.
         self._forms_list = QListWidget()
-        v.addWidget(self._forms_list, 1)
-
-        btns = QHBoxLayout()
-        add_b = QPushButton("+ Add form")
-        add_b.setProperty("role", "primary")
-        add_b.clicked.connect(self._on_add_form)
-        rm_b = QPushButton("- Remove form")
-        rm_b.setProperty("role", "danger")
-        rm_b.clicked.connect(self._on_remove_form)
-        btns.addWidget(add_b); btns.addWidget(rm_b); btns.addStretch(1)
-        v.addLayout(btns)
+        self._forms_list.setMaximumHeight(120)
+        v.addWidget(self._forms_list)
+        v.addStretch(1)
         return tab
 
-    def _on_active_form_changed(self, _i: int) -> None:
-        from PyQt6.QtCore import QTimer
+    def _on_shift_now(self) -> None:
+        """v3.9.7: out-of-conflict quick shift button. Pays the cost
+        immediately via set_active_form, so it follows the same
+        per-form mana/health cost rules as the in-conflict Shift
+        action."""
         fid = self._form_combo.currentData()
-        enc = self._state.state.active_encounter
-        in_conflict = enc is not None and enc.in_conflict_mode
-        if in_conflict:
-            # v3.4.5: changing form during a conflict is the "Shift" action,
-            # not a free dropdown change. Tell the user to use the action.
-            char = self._instance.character
-            QTimer.singleShot(0, lambda: QMessageBox.information(
-                self, "Shift in conflict",
-                "Changing form during a conflict is an action. Pick the "
-                "'Shift' action in the Conflict Resolution panel and "
-                "select the target form there. The shift will apply on "
-                "resolve and cost 100 mana."))
-            # Revert combo to whatever the character currently shows.
-            self._refresh_forms()
-            return
+        ok, msg = self._state.set_active_form(
+            self._instance.character, fid, pay_mana=True)
+        if not ok:
+            QMessageBox.warning(self, "Shift", msg)
+        self._refresh_forms()
 
-        def _do_change():
-            ok, msg = self._state.set_active_form(self._instance.character, fid)
-            if not ok:
-                QMessageBox.warning(self, "Shapeshift", msg)
-                # Revert combo to actual current form.
-                self._refresh_forms()
-        QTimer.singleShot(0, _do_change)
+    def _on_active_form_changed(self, _i: int) -> None:
+        """v3.9.7: the dropdown is now just a SELECTION — no side effect.
+        The actual shift happens when the user clicks "▶ Shift Now".
+        Live-update the shift-cost label on the button's tooltip so the
+        user sees the cost they're about to pay."""
+        if self._in_conflict:
+            return
+        fid = self._form_combo.currentData()
+        if fid is None:
+            return
+        target = next((f for f in self._instance.character.forms
+                       if f.id == fid), None)
+        from state import StateManager as _SM
+        m, h = _SM.form_shift_cost(target) if target else (0, 0)
+        parts = []
+        if m: parts.append(f"{m} mana")
+        if h: parts.append(f"{h} health")
+        cost = " + ".join(parts) or "free"
+        if hasattr(self, "_shift_now_btn"):
+            self._shift_now_btn.setToolTip(f"Shift cost: {cost}")
 
     def _on_add_form(self) -> None:
         from models import Form
@@ -964,9 +1008,44 @@ class CompactCharacterCard(QFrame):
         if not hasattr(self, "_form_combo"):
             return
         c = self._instance.character
-        self._shifter_chk.blockSignals(True)
-        self._shifter_chk.setChecked(c.is_shapeshifter)
-        self._shifter_chk.blockSignals(False)
+        if hasattr(self, "_shifter_chk"):
+            self._shifter_chk.blockSignals(True)
+            self._shifter_chk.setChecked(c.is_shapeshifter)
+            self._shifter_chk.blockSignals(False)
+        active = c.active_form()
+        # "Currently in" badge — same in both modes.
+        if active is not None:
+            self._active_form_lbl.setText(
+                f"<span style='color:#7fd194; font-weight:bold;'>"
+                f"● in {active.name}</span>")
+        else:
+            self._active_form_lbl.setText(
+                "<span style='color:#888;'>● humanoid (no form)</span>")
+        # In-conflict: render the active form's multipliers as a read-out.
+        if self._in_conflict:
+            if active is None:
+                self._form_active_info.setText(
+                    "<i>Not currently transformed.</i>")
+                return
+            mults = []
+            for label, attr in (
+                ("MAR", "martial_mult"), ("RNG", "ranged_mult"),
+                ("ARC", "arcana_mult"), ("STH", "stealth_mult"),
+                ("ARM", "armor_mult"), ("PER", "perception_mult"),
+                ("ACR", "acrobatics_mult"), ("LCK", "luck_mult"),
+                ("Health", "health_mult"), ("Stam", "stamina_mult"),
+                ("Mana", "mana_mult"),
+            ):
+                v = float(getattr(active, attr, 1.0) or 1.0)
+                if abs(v - 1.0) < 0.01:
+                    continue  # hide neutral multipliers — declutter
+                color = "#7fd194" if v > 1.0 else "#f76b66"
+                mults.append(
+                    f"<span style='color:{color};'>{label} ×{v:.2f}</span>")
+            body = "  ·  ".join(mults) if mults else "<i>No active modifiers.</i>"
+            self._form_active_info.setText(body)
+            return
+        # Out of conflict: the picker is the primary control.
         self._form_combo.blockSignals(True)
         self._form_combo.clear()
         self._form_combo.addItem("(none)", None)
@@ -978,6 +1057,9 @@ class CompactCharacterCard(QFrame):
                     self._form_combo.setCurrentIndex(i)
                     break
         self._form_combo.blockSignals(False)
+        # Update tooltip on the Shift Now button with the cost of the
+        # currently-selected (not necessarily active) form.
+        self._on_active_form_changed(self._form_combo.currentIndex())
         self._forms_list.clear()
         for f in c.forms:
             self._forms_list.addItem(
@@ -1291,8 +1373,10 @@ class ConflictPanel(QGroupBox):
         form_combo.currentIndexChanged.connect(
             self._on_shift_form_factory(side, form_combo))
         shift_l.addWidget(form_combo, 1)
-        shift_cost_lbl = QLabel("· 100 mana")
-        shift_cost_lbl.setStyleSheet("color: #4a9ad7;")
+        # v3.9.7: shift cost is per-form (mana and/or health). Label
+        # text is rebuilt on every refresh via _format_shift_cost.
+        shift_cost_lbl = QLabel("")
+        shift_cost_lbl.setTextFormat(Qt.TextFormat.RichText)
         shift_l.addWidget(shift_cost_lbl)
         sub_stack.addWidget(shift_pane)  # index 3
         layout.addWidget(sub_stack)
@@ -1313,6 +1397,7 @@ class ConflictPanel(QGroupBox):
             "sub_stack": sub_stack,
             "use_shield_chk": use_shield_chk,
             "form_combo": form_combo,
+            "shift_cost_lbl": shift_cost_lbl,
             "outcome": outcome,
         }
 
@@ -1463,13 +1548,42 @@ class ConflictPanel(QGroupBox):
                 if shield and use_shield:
                     stam_cost = shield.block_cost
             elif cur_action == "shift":
+                # v3.9.7: shift cost is per-form (mana, health, or both)
+                # — read from the pending form's enter_mana_cost /
+                # enter_health_cost rather than hardcoding 100 mana.
                 from state import StateManager as _SM
-                mana_cost = _SM.SHAPESHIFT_MANA_COST
+                pending_fid = (enc.left_pending_form_id if side == "left"
+                                else enc.right_pending_form_id)
+                target_form = None
+                if pending_fid:
+                    for f in inst.character.forms:
+                        if f.id == pending_fid:
+                            target_form = f; break
+                m, h = _SM.form_shift_cost(target_form)
+                mana_cost = m
+                # Stash health cost separately so the outcome row can
+                # render it. side_data picks this up below.
+                side_data_extra_health_cost = h
+            else:
+                side_data_extra_health_cost = 0
             side_data[side] = {
                 "atk_val": atk_val, "stam_cost": stam_cost,
-                "mana_cost": mana_cost, "inst": inst, "action": cur_action,
+                "mana_cost": mana_cost,
+                "health_cost": side_data_extra_health_cost,
+                "inst": inst, "action": cur_action,
                 "use_shield": use_shield,
             }
+            # v3.9.7: paint the per-form shift cost beside the form picker.
+            cost_parts = []
+            if mana_cost > 0 and cur_action == "shift":
+                cost_parts.append(
+                    f"<span style='color:#4a9ad7;'>{mana_cost} MP</span>")
+            if side_data_extra_health_cost > 0 and cur_action == "shift":
+                cost_parts.append(
+                    f"<span style='color:#f76b66;'>"
+                    f"{side_data_extra_health_cost} HP</span>")
+            col["shift_cost_lbl"].setText(
+                "· " + " + ".join(cost_parts) if cost_parts else "")
 
         # v3.4.4: damage received = FINAL HP loss (accounts for dodge / block /
         # form / DEF). v3.4.6: rendered as one inline rich-text row per side.
@@ -1496,27 +1610,36 @@ class ConflictPanel(QGroupBox):
             self._left_col["outcome"].setText(
                 self._format_outcome(l["atk_val"], left_final,
                                        l["stam_cost"], l["mana_cost"],
+                                       health_cost=l.get("health_cost", 0),
                                        two_line=two_line))
             self._right_col["outcome"].setText(
                 self._format_outcome(r["atk_val"], right_final,
                                        r["stam_cost"], r["mana_cost"],
+                                       health_cost=r.get("health_cost", 0),
                                        two_line=two_line))
 
     @staticmethod
     def _format_outcome(dealt: float, recv: float, stam: int, mana: int,
+                          health_cost: int = 0,
                           two_line: bool = False) -> str:
-        """v3.9 (A2): outcome row. Wraps to two lines (damage on top,
-        costs below) when the side panel is too narrow to fit four
-        chips on one line."""
+        """v3.9 (A2) / v3.9.7: outcome row. Wraps to two lines on narrow
+        panels. health_cost shows up only when non-zero (used by the
+        per-form shift cost so you can see "−12 HP" in addition to
+        SP/MP)."""
         sep = "<br>" if two_line else " &nbsp;·&nbsp; "
+        cost_parts = [
+            f"<span style='color:#e07a4a;'>-{stam} SP</span>",
+            f"<span style='color:#4a9ad7;'>-{mana} MP</span>",
+        ]
+        if health_cost > 0:
+            cost_parts.append(
+                f"<span style='color:#f76b66;'>-{health_cost} HP</span>")
         return (
             f"<span style='color:#7fd194;'><b>Dealt</b> {dealt:.1f}</span>"
             f" &nbsp;·&nbsp; "
             f"<span style='color:#f76b66;'><b>Recv</b> {recv:.1f}</span>"
             f"{sep}"
-            f"<span style='color:#e07a4a;'>-{stam} SP</span>"
-            f" &nbsp;·&nbsp; "
-            f"<span style='color:#4a9ad7;'>-{mana} MP</span>"
+            + " &nbsp;·&nbsp; ".join(cost_parts)
         )
 
     def _final_damage_received(self, defender, defender_action: str,

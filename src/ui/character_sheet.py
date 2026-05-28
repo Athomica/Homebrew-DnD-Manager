@@ -1100,16 +1100,22 @@ class CharacterSheet(QWidget):
         right_v.addLayout(head_row)
 
         cost_row = _QForm()
-        self._form_mana_to_enter_in = NoWheelDoubleSpinBox()
-        _no_track_spin(self._form_mana_to_enter_in)
-        self._form_mana_to_enter_in.setRange(0, 99999)
-        self._form_mana_to_enter_in.setDecimals(0)
-        self._form_mana_to_enter_in.valueChanged.connect(
-            self._on_form_field_changed)
-        self._form_maintain_in = QLineEdit()
-        self._form_maintain_in.editingFinished.connect(self._on_form_field_changed)
-        cost_row.addRow("Mana to enter:", self._form_mana_to_enter_in)
-        cost_row.addRow("Maintain cost:", self._form_maintain_in)
+        # v3.9.7: forms can cost mana, health, both, or nothing to shift
+        # into. The old "Mana to enter" + free-text "Maintain" pair is
+        # replaced by two structured numeric fields — Maintain has been
+        # removed entirely (it wasn't read anywhere).
+        self._form_enter_mana_in = NoWheelDoubleSpinBox()
+        _no_track_spin(self._form_enter_mana_in)
+        self._form_enter_mana_in.setRange(0, 99999); self._form_enter_mana_in.setDecimals(0)
+        self._form_enter_mana_in.setSuffix(" MP")
+        self._form_enter_mana_in.valueChanged.connect(self._on_form_field_changed)
+        self._form_enter_health_in = NoWheelDoubleSpinBox()
+        _no_track_spin(self._form_enter_health_in)
+        self._form_enter_health_in.setRange(0, 99999); self._form_enter_health_in.setDecimals(0)
+        self._form_enter_health_in.setSuffix(" HP")
+        self._form_enter_health_in.valueChanged.connect(self._on_form_field_changed)
+        cost_row.addRow("Mana cost to shift in:", self._form_enter_mana_in)
+        cost_row.addRow("Health cost to shift in:", self._form_enter_health_in)
         right_v.addLayout(cost_row)
 
         # Multipliers — proficiencies, then vitals.
@@ -1223,8 +1229,9 @@ class CharacterSheet(QWidget):
             return
         f = self._char.forms[row]
         editors = [
-            self._form_name_in, self._form_mana_to_enter_in,
-            self._form_maintain_in, self._form_inv_override_in,
+            self._form_name_in,
+            self._form_enter_mana_in, self._form_enter_health_in,
+            self._form_inv_override_in,
             self._form_restrictions_in, self._form_notes_in,
         ]
         sliders_spins: list = []
@@ -1234,8 +1241,8 @@ class CharacterSheet(QWidget):
             w.blockSignals(True)
         try:
             self._form_name_in.setText(f.name)
-            self._form_mana_to_enter_in.setValue(f.mana_to_enter or 0)
-            self._form_maintain_in.setText(f.maintain_cost or "")
+            self._form_enter_mana_in.setValue(getattr(f, "enter_mana_cost", 0) or 0)
+            self._form_enter_health_in.setValue(getattr(f, "enter_health_cost", 0) or 0)
             self._form_inv_override_in.setText(
                 "" if f.inventory_slot_override is None
                 else str(f.inventory_slot_override))
@@ -1280,8 +1287,8 @@ class CharacterSheet(QWidget):
         f = self._selected_form()
         if f is None:
             return
-        f.mana_to_enter = float(self._form_mana_to_enter_in.value() or 0)
-        f.maintain_cost = self._form_maintain_in.text().strip() or "-"
+        f.enter_mana_cost = float(self._form_enter_mana_in.value() or 0)
+        f.enter_health_cost = float(self._form_enter_health_in.value() or 0)
         inv = self._form_inv_override_in.text().strip()
         try:
             f.inventory_slot_override = int(inv) if inv else None
