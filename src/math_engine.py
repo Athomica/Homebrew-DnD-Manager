@@ -503,23 +503,29 @@ def effective_value(base: float, key: str, passives: list) -> tuple[float, float
     `amount%` of the base (so a -10% on a 200 max-mana gives -20).
     Order: fixed first, then percent against the original base — keeps
     the math commutative regardless of editor order."""
+    # v3.10.7: percent passives now reference the EFFECTIVE base (raw
+    # + every fixed passive already applied) instead of the raw base.
+    # Two-pass: sum every fixed amount first, sum every percent in
+    # `pct_sum` (in percent units), then percent applies to
+    # `base + fixed_delta`. Matches the natural reading of "the
+    # effective max"; previously a +50 fixed passive plus a +10%
+    # passive on a 100 base gave 100+50+10 = 160, now it gives
+    # 100 + 50 + (150 * 10%) = 165.
     fixed_delta = 0.0
-    pct_delta = 0.0
+    pct_sum = 0.0
     for p in passives:
         if getattr(p, "affected_value", None) != key:
             continue
-        # v3.10.4: passives targeting a current vital (health, stamina,
-        # mana) are DoT/HoT — they don't shift the effective value
-        # statically, they tick on turn-advance via change_turn(). So
-        # we skip them here. Max-vital and proficiency passives still
-        # contribute statically while active.
+        # Passives targeting a current vital tick on turn-advance —
+        # they don't contribute statically here.
         if key in ("health", "stamina", "mana"):
             continue
         amount = float(getattr(p, "amount", 0.0) or 0.0)
         if getattr(p, "scope", "fixed") == "percent":
-            pct_delta += base * (amount / 100.0)
+            pct_sum += amount
         else:
             fixed_delta += amount
+    pct_delta = (base + fixed_delta) * (pct_sum / 100.0)
     delta = fixed_delta + pct_delta
     return base + delta, delta
 

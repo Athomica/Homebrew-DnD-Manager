@@ -1,5 +1,22 @@
 # DnD Manager Changelog
 
+## v3.10.7 — Percent passives apply against the effective base
+
+A +50 fixed passive plus a +10% passive on a base-100 health_max
+used to give `100 + 50 + 10%(100) = 160` — the percent passive read
+the raw base instead of the form+fixed-adjusted total.
+
+v3.10.7 splits `effective_value` into two passes:
+
+1. Sum every fixed amount into `fixed_delta`.
+2. Sum every percent amount into `pct_sum` (in percent units).
+3. Apply `pct_sum%` against `base + fixed_delta`, not `base`.
+
+So the same setup now gives `100 + 50 + 10%(150) = 165`. Form
+multipliers continue to apply first (they're baked into `base`
+before this function runs), so a Wolf form (×1.5 health) + 50
+fixed + 10% yields `150 + 50 + 10%(200) = 220`. Verified.
+
 ## v3.10.6 — Visible turn countdown + split passive view + vital rewind
 
 ### `Nt left` is visible in every passive label
