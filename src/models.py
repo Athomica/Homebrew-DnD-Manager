@@ -525,6 +525,19 @@ class Encounter:
     # conflicts, per user direction.)
     left_action: str = "attack"
     right_action: str = "attack"
+    # v3.10: per-side per-conflict picker state. Each attack sub-type
+    # (martial / ranged / stealth) lets the GM pick WHICH weapon is
+    # used; arcana attack picks WHICH destruction spell; Cast picks
+    # a non-destruction spell. The pickers are also surfaced in the
+    # Player View so players see what's about to happen. These fields
+    # carry the chosen ids (None = no pick yet, fall back to the
+    # character's default active weapon / equipped spell).
+    left_action_weapon_id: Optional[str] = None
+    right_action_weapon_id: Optional[str] = None
+    left_action_spell_id: Optional[str] = None
+    right_action_spell_id: Optional[str] = None
+    left_cast_spell_id: Optional[str] = None
+    right_cast_spell_id: Optional[str] = None
 
     # v3.7: per-encounter attack log. Each time a participant lands actual
     # damage on another participant during conflict resolution, the

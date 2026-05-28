@@ -386,24 +386,12 @@ class CompactCharacterCard(QFrame):
         v.setContentsMargins(6, 8, 6, 6)
         v.setSpacing(8)
 
-        # v3.9.4: in conflict, the Gear tab disappears and the only
-        # mid-fight gear action — swap between primary and secondary
-        # weapon — surfaces here as a compact one-line control.
-        if self._in_conflict:
-            swap_row = QHBoxLayout()
-            swap_row.setSpacing(8)
-            self._using_primary_chk = QCheckBox("Using primary")
-            self._using_primary_chk.setChecked(
-                self._instance.character.using_primary)
-            self._using_primary_chk.toggled.connect(
-                lambda val: self._set_field("using_primary", val))
-            swap_row.addWidget(self._using_primary_chk)
-            self._swap_btn = QPushButton("⇄ Swap")
-            self._swap_btn.setToolTip("Swap primary ⇄ secondary weapon")
-            self._swap_btn.clicked.connect(self._on_swap_primary_secondary)
-            swap_row.addWidget(self._swap_btn)
-            swap_row.addStretch(1)
-            v.addLayout(swap_row)
+        # v3.10: the in-conflict "Using primary / Swap" row is gone.
+        # Mid-fight weapon selection now lives on the conflict-resolution
+        # action sub-options (each attack sub-type and Cast/Shift carry
+        # their own weapon-or-spell dropdown). The "active weapon" used
+        # by the damage formulas is driven by whatever the GM picks
+        # there — no separate primary/secondary state to track.
 
         # Vitals
         self._hp_bar = VitalBar("Health", "hp")
@@ -1163,6 +1151,11 @@ class CompactCharacterCard(QFrame):
         in_conflict = bool(enc and enc.in_conflict_mode)
         for bar in (self._hp_bar, self._stam_bar, self._mana_bar):
             bar.set_conflict_mode(in_conflict)
+            # v3.10: hide cur/max spinboxes in conflict and always in
+            # the Player View. The progress bar + ≈N label convey what
+            # everyone needs to see; the editable inputs reappear in
+            # the GM card when the conflict ends.
+            bar.set_inputs_visible(not (in_conflict or self._viewer_mode))
         # v3.9.2 (B4): per-turn forecast for bleed/regen-style passives.
         all_p = me.collect_active_passives(
             c, self._state.state.weapons, self._state.state.armors,
@@ -1305,8 +1298,10 @@ class ConflictPanel(QGroupBox):
             # / Recv / -SP / -MP numbers the GM doesn't want players
             # seeing during a conflict).
             col["outcome"].setVisible(False)
-            # Hide the sub_stack (form picker / use-shield / etc).
-            col["sub_stack"].setVisible(False)
+            # v3.10: KEEP the sub_stack visible — players need to see
+            # WHAT the GM picked (atk type, weapon, spell, form,
+            # whether to use a shield). The findChildren-disable pass
+            # below makes the controls read-only.
         for w in self.findChildren((QAbstractSpinBox, QLineEdit, QComboBox,
                                        QCheckBox, QPushButton, QSlider)):
             w.setEnabled(False)
@@ -1396,29 +1391,49 @@ class ConflictPanel(QGroupBox):
         last.setStyleSheet(last.styleSheet() + "\nQPushButton { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }")
         layout.addLayout(action_row)
 
-        # v3.4.6: ONE sub-control row, swapped via QStackedWidget so the
-        # panel height doesn't jump when the action changes.
+        # v3.4.6 / v3.10: ONE sub-control row, swapped via QStackedWidget.
+        # Pane indices:
+        #   0  Attack — atk-type radios PLUS a dynamic weapon/spell
+        #              picker that updates with the radio choice.
+        #   1  Block  — use-shield checkbox.
+        #   2  Dodge  — (empty pane.)
+        #   3  Shift  — form picker + cost chip.
+        #   4  Cast   — searchable non-destruction spell picker.
         sub_stack = QStackedWidget()
         sub_stack.setSizePolicy(QSizePolicy.Policy.Expanding,
                                   QSizePolicy.Policy.Fixed)
-        # Pane 0: ATK type radios (for Attack)
+        # ── Pane 0: Attack ─────────────────────────────────────────
         atk_pane = QFrame()
-        atk_l = QHBoxLayout(atk_pane); atk_l.setContentsMargins(8, 4, 8, 4)
-        atk_l.setSpacing(4)
+        atk_l = QVBoxLayout(atk_pane)
+        atk_l.setContentsMargins(8, 4, 8, 4); atk_l.setSpacing(4)
+        radios_row = QHBoxLayout(); radios_row.setSpacing(4)
         atk_group = QButtonGroup(box)
         atk_radios: dict[str, QRadioButton] = {}
         for k in self.ATK_KINDS:
             rb = QRadioButton(k.title())
             atk_group.addButton(rb)
-            atk_l.addWidget(rb)
+            radios_row.addWidget(rb)
             atk_radios[k] = rb
             rb.toggled.connect(self._on_atk_toggled_factory(side, k))
-        atk_l.addStretch(1)
+        radios_row.addStretch(1)
         atk_radios["martial"].blockSignals(True)
         atk_radios["martial"].setChecked(True)
         atk_radios["martial"].blockSignals(False)
+        atk_l.addLayout(radios_row)
+        # Weapon/spell picker — populated by refresh() based on which
+        # atk-type radio is selected (martial/ranged/stealth → weapons;
+        # arcana → destruction spells).
+        atk_tool_row = QHBoxLayout(); atk_tool_row.setSpacing(6)
+        atk_tool_lbl = QLabel("Using:")
+        atk_tool_row.addWidget(atk_tool_lbl)
+        atk_tool_combo = NoWheelComboBox()
+        atk_tool_combo.currentIndexChanged.connect(
+            self._on_atk_tool_picked_factory(side, atk_tool_combo))
+        atk_tool_row.addWidget(atk_tool_combo, 1)
+        atk_l.addLayout(atk_tool_row)
         sub_stack.addWidget(atk_pane)  # index 0
-        # Pane 1: Use shield (for Block)
+
+        # ── Pane 1: Block ──────────────────────────────────────────
         shield_pane = QFrame()
         shield_l = QHBoxLayout(shield_pane); shield_l.setContentsMargins(8, 4, 8, 4)
         use_shield_chk = QCheckBox("Use shield (damage_negation + block cost)")
@@ -1427,11 +1442,13 @@ class ConflictPanel(QGroupBox):
         shield_l.addWidget(use_shield_chk)
         shield_l.addStretch(1)
         sub_stack.addWidget(shield_pane)  # index 1
-        # Pane 2: empty (for Cast / Dodge — no sub-options needed)
+
+        # ── Pane 2: Dodge (empty) ──────────────────────────────────
         empty_pane = QFrame()
         QHBoxLayout(empty_pane).setContentsMargins(0, 0, 0, 0)
         sub_stack.addWidget(empty_pane)  # index 2
-        # Pane 3: form picker (for Shift)
+
+        # ── Pane 3: Shift ──────────────────────────────────────────
         shift_pane = QFrame()
         shift_l = QHBoxLayout(shift_pane); shift_l.setContentsMargins(8, 4, 8, 4)
         shift_l.addWidget(QLabel("Shift to:"))
@@ -1439,12 +1456,30 @@ class ConflictPanel(QGroupBox):
         form_combo.currentIndexChanged.connect(
             self._on_shift_form_factory(side, form_combo))
         shift_l.addWidget(form_combo, 1)
-        # v3.9.7: shift cost is per-form (mana and/or health). Label
-        # text is rebuilt on every refresh via _format_shift_cost.
         shift_cost_lbl = QLabel("")
         shift_cost_lbl.setTextFormat(Qt.TextFormat.RichText)
         shift_l.addWidget(shift_cost_lbl)
         sub_stack.addWidget(shift_pane)  # index 3
+
+        # ── Pane 4: Cast ───────────────────────────────────────────
+        # Searchable non-destruction spell picker. The combobox is
+        # editable so typing filters the dropdown by substring.
+        cast_pane = QFrame()
+        cast_l = QHBoxLayout(cast_pane); cast_l.setContentsMargins(8, 4, 8, 4)
+        cast_l.addWidget(QLabel("Cast:"))
+        cast_combo = NoWheelComboBox()
+        cast_combo.setEditable(True)
+        cast_combo.setInsertPolicy(NoWheelComboBox.InsertPolicy.NoInsert)
+        # QCompleter on the line edit gives type-to-filter behavior.
+        from PyQt6.QtWidgets import QCompleter
+        cast_completer = QCompleter(cast_combo.model(), cast_combo)
+        cast_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        cast_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        cast_combo.setCompleter(cast_completer)
+        cast_combo.currentIndexChanged.connect(
+            self._on_cast_spell_picked_factory(side, cast_combo))
+        cast_l.addWidget(cast_combo, 1)
+        sub_stack.addWidget(cast_pane)  # index 4
         layout.addWidget(sub_stack)
 
         # v3.4.6: inline outcome row — dealt / received / SP / MP on a single
@@ -1464,8 +1499,113 @@ class ConflictPanel(QGroupBox):
             "use_shield_chk": use_shield_chk,
             "form_combo": form_combo,
             "shift_cost_lbl": shift_cost_lbl,
+            "atk_tool_combo": atk_tool_combo,
+            "atk_tool_lbl": atk_tool_lbl,
+            "cast_combo": cast_combo,
             "outcome": outcome,
         }
+
+    def _refresh_attack_tool_combo(self, side: str, col: dict,
+                                     character) -> None:
+        """v3.10: keep the Attack pane's weapon-or-spell dropdown in
+        sync with the currently-checked atk-type radio.
+
+        - martial / ranged / stealth → list every weapon equipped on
+          the character (primary, secondary, shield) by name.
+        - arcana → list every destruction spell the character knows
+          (filtered by arcana_level <= character's arcana_sp).
+        """
+        sel = next((k for k, rb in col["atk_radios"].items()
+                    if rb.isChecked()), "martial")
+        combo = col["atk_tool_combo"]
+        combo.blockSignals(True)
+        combo.clear()
+        weapons_by_id = {w.id: w for w in self._state.state.weapons}
+        if sel == "arcana":
+            col["atk_tool_lbl"].setText("Spell:")
+            for s in self._state.state.spells:
+                if getattr(s, "school", "Destruction") != "Destruction":
+                    continue
+                if s.id not in character.spell_ids:
+                    continue
+                if s.arcana_level > character.arcana_sp:
+                    continue
+                combo.addItem(f"🔮 {s.name}", s.id)
+            enc = self._state.state.active_encounter
+            pick = getattr(enc, f"{side}_action_spell_id", None) if enc else None
+        else:
+            col["atk_tool_lbl"].setText("Using:")
+            # Tag every equipped weapon by slot for clarity.
+            for slot_attr, slot_label in (
+                ("primary_weapon_id", "Primary"),
+                ("secondary_weapon_id", "Secondary"),
+                ("shield_id", "Shield"),
+            ):
+                wid = getattr(character, slot_attr, None)
+                if not wid:
+                    continue
+                w = weapons_by_id.get(wid)
+                if w is None:
+                    continue
+                combo.addItem(f"{slot_label}: {w.name}", w.id)
+            enc = self._state.state.active_encounter
+            pick = getattr(enc, f"{side}_action_weapon_id", None) if enc else None
+        # Restore the saved pick, or default to the first option.
+        if pick is not None:
+            for i in range(combo.count()):
+                if combo.itemData(i) == pick:
+                    combo.setCurrentIndex(i)
+                    break
+        combo.blockSignals(False)
+
+    def _refresh_cast_combo(self, side: str, col: dict, character) -> None:
+        """v3.10: non-destruction spells the character knows. Searchable
+        via the editable QComboBox + QCompleter."""
+        combo = col["cast_combo"]
+        combo.blockSignals(True)
+        combo.clear()
+        for s in self._state.state.spells:
+            if getattr(s, "school", "Destruction") == "Destruction":
+                continue
+            if s.id not in character.spell_ids:
+                continue
+            if s.arcana_level > character.arcana_sp:
+                continue
+            tag = "✨" if s.school == "Alteration" else "💚"
+            combo.addItem(f"{tag} {s.name}  ({s.school})", s.id)
+        enc = self._state.state.active_encounter
+        pick = getattr(enc, f"{side}_cast_spell_id", None) if enc else None
+        if pick is not None:
+            for i in range(combo.count()):
+                if combo.itemData(i) == pick:
+                    combo.setCurrentIndex(i)
+                    break
+        combo.blockSignals(False)
+
+    # v3.10: handler factories for the new per-side pickers.
+    def _on_atk_tool_picked_factory(self, side: str, combo: NoWheelComboBox):
+        def handler(_i: int) -> None:
+            enc = self._state.state.active_encounter
+            if enc is None:
+                return
+            pick = combo.currentData()
+            sel = (enc.left_atk_selection if side == "left"
+                    else enc.right_atk_selection)
+            if sel == "arcana":
+                setattr(enc, f"{side}_action_spell_id", pick)
+            else:
+                setattr(enc, f"{side}_action_weapon_id", pick)
+            self._state.encounter_changed.emit()
+        return handler
+
+    def _on_cast_spell_picked_factory(self, side: str, combo: NoWheelComboBox):
+        def handler(_i: int) -> None:
+            enc = self._state.state.active_encounter
+            if enc is None:
+                return
+            setattr(enc, f"{side}_cast_spell_id", combo.currentData())
+            self._state.encounter_changed.emit()
+        return handler
 
     def _on_shift_form_factory(self, side: str, combo: NoWheelComboBox):
         def handler(_idx: int) -> None:
@@ -1560,10 +1700,16 @@ class ConflictPanel(QGroupBox):
                 if rb.isChecked() != (k == sel):
                     rb.blockSignals(True); rb.setChecked(k == sel); rb.blockSignals(False)
             # Show the correct pane of the single sub-control stack.
-            #   atk: 0  block: 1  cast/dodge: 2 (empty)  shift: 3
-            pane_idx = {"attack": 0, "block": 1, "cast": 2,
-                         "dodge": 2, "shift": 3}.get(cur_action, 2)
+            #   attack: 0  block: 1  dodge: 2 (empty)  shift: 3  cast: 4
+            pane_idx = {"attack": 0, "block": 1, "dodge": 2,
+                         "shift": 3, "cast": 4}.get(cur_action, 2)
             col["sub_stack"].setCurrentIndex(pane_idx)
+            # v3.10: populate the Attack pane's weapon/spell dropdown
+            # based on the currently-checked atk-type radio.
+            self._refresh_attack_tool_combo(side, col, inst.character)
+            # v3.10: populate the Cast pane's non-destruction spell
+            # picker from the character's known spells.
+            self._refresh_cast_combo(side, col, inst.character)
             # Header action chip.
             icon, name, accent = self.ACTION_META.get(cur_action, ("", "", "#888"))
             col["action_chip"].setText(f"{icon} {name}")

@@ -65,10 +65,16 @@ class VitalBar(QWidget):
         self._tick_lbl.setProperty("role", "dim")
 
         bar_row.addWidget(self._bar, 1)
-        bar_row.addWidget(QLabel("cur"))
+        # Track the cur/max widgets so we can hide them as a group.
+        # v3.10: in conflict (and always in the Player View) the
+        # editable spinboxes are noise — the bar + effective label
+        # convey everything the participant needs to read.
+        self._cur_label = QLabel("cur")
+        bar_row.addWidget(self._cur_label)
         bar_row.addWidget(self._current_input)
+        self._max_label = QLabel("max")
         if not hide_max:
-            bar_row.addWidget(QLabel("max"))
+            bar_row.addWidget(self._max_label)
             bar_row.addWidget(self._max_input)
         bar_row.addWidget(self._eff_lbl)
         bar_row.addWidget(self._tick_lbl)
@@ -119,6 +125,19 @@ class VitalBar(QWidget):
         for w in (self._current_input, self._max_input):
             w.blockSignals(False)
         self._refresh_bar(animate=animate, prev_value=prev)
+
+    def set_inputs_visible(self, visible: bool) -> None:
+        """v3.10: hide the editable cur/max spinbox row. Used by:
+          - the compact card during a conflict (GM doesn't need to
+            tweak vitals mid-fight — damage applies through the
+            conflict-resolve, items / potions through Use Item),
+          - the Player View at all times (players never see the
+            editable controls).
+        The bar itself, the inline ≈N label, and the tick forecast
+        all stay visible."""
+        for w in (self._cur_label, self._current_input,
+                   self._max_label, self._max_input):
+            w.setVisible(visible)
 
     def set_conflict_mode(self, in_conflict: bool) -> None:
         """v3.9.1 (B3): during a conflict, the effective values are

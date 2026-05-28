@@ -595,7 +595,13 @@ def derive_combat_view(character: Character,
                        weapons: list[Weapon],
                        armors: list[Armor],
                        items: Optional[list] = None,
-                       spell=None) -> dict[str, float]:
+                       spell=None,
+                       weapon_override=None) -> dict[str, float]:
+    """v3.10: `weapon_override` lets the conflict resolver compute the
+    outgoing damage using a SPECIFIC weapon (e.g. the one the GM
+    picked in the conflict-panel martial/ranged/stealth dropdown)
+    instead of the character's default `using_primary` choice. None
+    falls back to `character.get_active_weapon(...)`."""
     profs = derive_proficiency_view(character)
     armor_throw = profs["armor"]["throw"]
     armor_sp_eff = character.effective_sp("armor")
@@ -603,7 +609,7 @@ def derive_combat_view(character: Character,
     armor_pieces = character.get_armor_pieces(armors)
     armor_sum = def_current(armor_pieces)
 
-    weapon = character.get_active_weapon(weapons)
+    weapon = weapon_override if weapon_override is not None else character.get_active_weapon(weapons)
     weapon_damage = weapon.damage if weapon else 0
 
     if items is not None:

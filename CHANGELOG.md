@@ -1,5 +1,59 @@
 # DnD Manager Changelog
 
+## v3.10 — Conflict-panel pickers, weapon-per-attack, spell-per-cast
+
+### Adding a spell refreshes character pickers in real time
+`SpellsPanel._on_add` now emits `lists_changed` (previously only
+`_on_apply` did). Firebolt added in the Lists tab now appears in
+every character sheet's "Add from list" dropdown without an app
+restart.
+
+### Conflict resolution — sub-option pickers
+Every action's sub-controls are now first-class and visible in both
+the GM panel and the Player View.
+
+- **Attack**: atk-type radios on top, plus a dynamic picker below:
+  - *Martial / Ranged / Stealth* → dropdown listing every equipped
+    weapon by slot label (`Primary: Sword`, `Secondary: Bow`,
+    `Shield: Buckler`).
+  - *Arcana* → dropdown of every **destruction** spell the character
+    knows (filtered by `arcana_level ≤ character.arcana_sp`).
+- **Block** keeps the "Use shield" checkbox.
+- **Dodge** has no sub-option.
+- **Shift** keeps the form picker and per-form cost chip.
+- **Cast** — new pane with a **searchable** dropdown of every
+  **non-destruction** spell the character knows (Alteration /
+  Restoration). Type to filter.
+
+The picked weapon / spell is stored per-side in the encounter
+(`left_action_weapon_id`, `left_action_spell_id`, `left_cast_spell_id`
+and right-side mirrors) and broadcast via `encounter_changed`, so the
+Player View mirror reflects the GM's choice immediately.
+
+### Damage / cost formulas honor the per-side pick
+`derive_combat_view` grew a `weapon_override=` parameter.
+`StateManager._outgoing_damage` and `_action_costs` both grew
+`weapon_override=` and `spell_override=` parameters. The conflict
+resolver passes the per-side pick into both — damage / cost match
+the actual weapon-or-spell that was chosen for the round, not just
+the character's last-equipped default.
+
+### "Using primary" and "Swap" removed
+The Status tab's in-conflict swap row is gone. Choosing what to use
+now happens through the conflict-panel sub-pickers exclusively.
+
+### Player View sees the sub-pickers
+The viewer-mode lock kept the sub_stack hidden in v3.9.8/9. v3.10
+keeps it VISIBLE (still disabled) so players see which weapon /
+spell / form / shield-toggle the GM picks. Outcome row (Dealt /
+Recv / costs) is still hidden.
+
+### Cur/Max spinboxes hidden in conflict and Player View
+`VitalBar.set_inputs_visible(bool)` toggles the cur/max spinbox
+row. Compact card hides them during a conflict (GM doesn't need to
+hand-edit vitals mid-fight) and always in the Player View
+(players never see editable controls).
+
 ## v3.9.9 — Player View mirrors conflict actions in real time
 
 The Player View (v3.9.8) updated when characters took damage or

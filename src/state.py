@@ -1184,14 +1184,18 @@ class StateManager(QObject):
             return None
         return next((s for s in self.state.spells if s.id == sid), None)
 
-    def _action_costs(self, character: Character, selection: str) -> tuple[int, int]:
-        """Stamina+mana cost of using `selection` ATK with current equipment.
-        Used for the conflict resolution display."""
-        w = character.get_active_weapon(self.state.weapons)
+    def _action_costs(self, character: Character, selection: str,
+                       weapon_override=None, spell_override=None) -> tuple[int, int]:
+        """v3.10: stamina+mana cost of using `selection` ATK. With
+        `weapon_override` / `spell_override`, the cost comes from the
+        explicitly-chosen weapon / spell instead of the character's
+        currently-equipped default. The conflict panel passes the
+        per-side picker choice; resolve uses the same."""
+        w = weapon_override if weapon_override is not None else character.get_active_weapon(self.state.weapons)
         stam = w.stamina_cost if w else 0
         mana = getattr(w, "mana_cost", 0) if w else 0
         if selection == "arcana":
-            spell = self._equipped_spell(character)
+            spell = spell_override if spell_override is not None else self._equipped_spell(character)
             if spell is None and character.can_cast_without_staff:
                 if character.selected_spell_id:
                     spell = next((s for s in self.state.spells
@@ -1200,6 +1204,19 @@ class StateManager(QObject):
                 stam += getattr(spell, "stamina_cost", 0)
                 mana += spell.mana_cost
         return stam, mana
+
+    def _outgoing_damage(self, character: Character, selection: str,
+                          weapon_override=None, spell_override=None) -> float:
+        """v3.10: with optional overrides, route through
+        derive_combat_view's weapon_override + spell parameters so the
+        damage formula uses the GM's per-conflict pick rather than the
+        character's default active weapon."""
+        cb = me.derive_combat_view(
+            character, self.state.weapons, self.state.armors, self.state.items,
+            spell=(spell_override if spell_override is not None
+                    else self._equipped_spell(character)),
+            weapon_override=weapon_override)
+        return cb.get(f"{selection}_atk", 0)
 
     # -- v3.3: equipment / inventory swap helpers -----------------------
     def equip_from_inventory(self, instance_id: str,
@@ -1339,11 +1356,9 @@ class StateManager(QObject):
                 msgs.append(f"{ptr.name}: passive {p.name} {p.amount:+.1f}")
         return msgs
 
-    def _outgoing_damage(self, character: Character, selection: str) -> float:
-        cb = me.derive_combat_view(
-            character, self.state.weapons, self.state.armors, self.state.items,
-            spell=self._equipped_spell(character))
-        return cb.get(f"{selection}_atk", 0)
+    # v3.10: _outgoing_damage moved up alongside _action_costs and gained
+    # weapon_override / spell_override parameters.
+
 
     def _opponent_throw(self, opponent: Character) -> float:
         """Best-case opponent throw — used as the bar a dodge needs to beat.
@@ -1367,23 +1382,46 @@ class StateManager(QObject):
         msgs: list[str] = []
         # Compute each side's outgoing offensive damage based on its action.
         # Actions: attack, block, cast, dodge, use_item.
+        # v3.10: pick up the per-side conflict-panel selections so the
+        # damage formula uses the GM's explicit weapon / spell choice,
+        # not whatever was last equipped on the character sheet.
+        def _picked_weapon(side: str):
+            wid = (enc.left_action_weapon_id if side == "left"
+                    else enc.right_action_weapon_id)
+            if not wid:
+                return None
+            return next((w for w in self.state.weapons if w.id == wid), None)
+
+        def _picked_spell(side: str, field: str):
+            sid = getattr(enc, f"{side}_{field}")
+            if not sid:
+                return None
+            return next((s for s in self.state.spells if s.id == sid), None)
+
         def damage_from(side: str, char: Character) -> float:
             action = enc.left_action if side == "left" else enc.right_action
             if action == "attack":
                 sel = enc.left_atk_selection if side == "left" else enc.right_atk_selection
-                return self._outgoing_damage(char, sel)
+                # Martial / ranged / stealth ⇒ chosen weapon.
+                # Arcana ⇒ chosen destruction spell.
+                weapon = _picked_weapon(side) if sel != "arcana" else None
+                spell = _picked_spell(side, "action_spell_id") if sel == "arcana" else None
+                return self._outgoing_damage(char, sel,
+                                              weapon_override=weapon,
+                                              spell_override=spell)
             if action == "cast":
-                spell = self._equipped_spell(char)
-                if spell is None and char.can_cast_without_staff:
-                    if char.selected_spell_id:
-                        spell = next((s for s in self.state.spells
-                                      if s.id == char.selected_spell_id), None)
+                # Cast picks a non-destruction spell — no damage by
+                # design (per the original spec: non-destruction casts
+                # deal no direct damage).
+                spell = _picked_spell(side, "cast_spell_id")
+                if spell is None:
+                    spell = self._equipped_spell(char)
                 if spell is None:
                     return 0.0
                 if getattr(spell, "school", "Destruction") != "Destruction":
-                    return 0.0  # non-destruction casts deal no direct damage
-                # Use arcana ATK with this spell as the focus.
-                return self._outgoing_damage(char, "arcana")
+                    return 0.0
+                # Legacy path: equipped spell IS destruction → arcana atk.
+                return self._outgoing_damage(char, "arcana", spell_override=spell)
             return 0.0  # block, dodge, use_item deal no offensive damage
 
         left_dmg = damage_from("left", left.character)
@@ -1524,12 +1562,22 @@ class StateManager(QObject):
                         msgs.append(f"item use failed: {msg}")
 
         # --- stamina + mana costs for offensive actions ---
+        # v3.10: use the same per-side picker as the damage formula so
+        # costs match the actual weapon/spell that was used.
         for side, inst, action in (("left", left, enc.left_action),
                                     ("right", right, enc.right_action)):
             if action in ("attack", "cast"):
                 sel = (enc.left_atk_selection if side == "left"
                        else enc.right_atk_selection) if action == "attack" else "arcana"
-                stam, mana = self._action_costs(inst.character, sel)
+                weapon = _picked_weapon(side) if (action == "attack" and sel != "arcana") else None
+                spell = None
+                if action == "attack" and sel == "arcana":
+                    spell = _picked_spell(side, "action_spell_id")
+                elif action == "cast":
+                    spell = _picked_spell(side, "cast_spell_id")
+                stam, mana = self._action_costs(
+                    inst.character, sel,
+                    weapon_override=weapon, spell_override=spell)
                 inst.character.stamina_current = max(
                     0, inst.character.stamina_current - stam)
                 inst.character.mana_current = max(

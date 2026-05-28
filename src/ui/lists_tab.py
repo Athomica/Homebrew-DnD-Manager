@@ -740,6 +740,11 @@ class SpellsListTab(QWidget):
         s = self._state.add_spell()
         self._current_id = s.id
         self.refresh_list()
+        # v3.10: broadcast so character spell pickers (Add From List,
+        # equipped-spell combos, the conflict-panel cast dropdown,
+        # etc.) refresh in real time instead of needing a manual
+        # restart of the app.
+        self._state.lists_changed.emit()
 
     def _on_duplicate(self) -> None:
         if not self._current_id:
