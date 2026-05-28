@@ -414,6 +414,26 @@ class TestEncounterSystem(unittest.TestCase):
         # The snapshot is consumed on rewind so a re-advance re-snapshots.
         self.assertNotIn(0, inst.turn_snapshots)
 
+    def test_can_cast_magic_requires_staff_or_innate(self):
+        # v3.10.8: a character can cast only if they're innate OR
+        # have a weapon flagged is_staff in their primary or
+        # secondary slot.
+        from models import Weapon
+        weapons: list = []
+        sword = Weapon(name="Sword", damage=10, is_staff=False)
+        wand = Weapon(name="Wand", damage=2, is_staff=True)
+        weapons.extend([sword, wand])
+        plain = Character(name="Knight", primary_weapon_id=sword.id)
+        innate = Character(name="Sorcerer", can_cast_without_staff=True)
+        with_wand = Character(name="Mage", primary_weapon_id=wand.id)
+        with_wand_secondary = Character(name="Mage2",
+                                          primary_weapon_id=sword.id,
+                                          secondary_weapon_id=wand.id)
+        self.assertFalse(plain.can_cast_magic(weapons))
+        self.assertTrue(innate.can_cast_magic(weapons))
+        self.assertTrue(with_wand.can_cast_magic(weapons))
+        self.assertTrue(with_wand_secondary.can_cast_magic(weapons))
+
     def test_turn_advance_expires_short_passive(self):
         # v3.10.4: a "Single use" passive lives for the current turn
         # only — advancing one turn must drop it from the list.

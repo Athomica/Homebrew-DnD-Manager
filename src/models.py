@@ -437,6 +437,30 @@ class Character:
                 return w
         return None
 
+    def can_cast_magic(self, weapon_list: list["Weapon"]) -> bool:
+        """v3.10.8: can this character cast spells RIGHT NOW?
+
+        True if either:
+        - `can_cast_without_staff` is set (innate caster), OR
+        - they have at least one weapon equipped (primary OR
+          secondary) flagged `is_staff` (i.e. a staff or wand).
+
+        Used by the conflict panel to grey out the Cast action and
+        the Arcana attack sub-option when the character has no way
+        to channel magic.
+        """
+        if getattr(self, "can_cast_without_staff", False):
+            return True
+        by_id = {w.id: w for w in weapon_list}
+        for slot in ("primary_weapon_id", "secondary_weapon_id"):
+            wid = getattr(self, slot, None)
+            if not wid:
+                continue
+            w = by_id.get(wid)
+            if w is not None and getattr(w, "is_staff", False):
+                return True
+        return False
+
     def get_equipped_spell(self, spell_list: list) -> Optional["Spell"]:
         """v3.2: return the Spell slotted into the active staff/wand, or the
         free-cast spell when can_cast_without_staff. Returns None if no spell

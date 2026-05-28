@@ -1872,6 +1872,36 @@ class ConflictPanel(QGroupBox):
                 continue
             col["name_lbl"].setText(inst.character.name)
             cur_action = (enc.left_action if side == "left" else enc.right_action)
+            # v3.10.8: grey out Cast + Arcana when the character has
+            # no way to channel magic (not innate AND no staff/wand
+            # equipped). Tooltips explain why so the GM isn't left
+            # guessing.
+            can_cast = inst.character.can_cast_magic(self._state.state.weapons)
+            cast_btn = col["action_radios"].get("cast")
+            if cast_btn is not None:
+                cast_btn.setEnabled(can_cast)
+                cast_btn.setToolTip(
+                    "" if can_cast else
+                    "Needs a staff/wand equipped, or "
+                    "'Can cast without staff/wand' checked on the character.")
+            arc_rb = col["atk_radios"].get("arcana")
+            if arc_rb is not None:
+                arc_rb.setEnabled(can_cast)
+                arc_rb.setToolTip(
+                    "" if can_cast else
+                    "Arcana attack needs a staff/wand or innate casting.")
+            # If the current action / atk-type is no longer allowed,
+            # snap back to a safe default so the resolve doesn't
+            # try to cast with nothing equipped.
+            if not can_cast:
+                if cur_action == "cast":
+                    if side == "left": enc.left_action = "attack"
+                    else: enc.right_action = "attack"
+                    cur_action = "attack"
+                if (enc.left_atk_selection if side == "left"
+                        else enc.right_atk_selection) == "arcana":
+                    if side == "left": enc.left_atk_selection = "martial"
+                    else: enc.right_atk_selection = "martial"
             # Sync segmented action buttons.
             for k, btn in col["action_radios"].items():
                 if btn.isChecked() != (k == cur_action):

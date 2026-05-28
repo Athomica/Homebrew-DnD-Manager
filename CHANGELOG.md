@@ -1,5 +1,25 @@
 # DnD Manager Changelog
 
+## v3.10.8 — Cast / Arcana gated on staff or innate caster
+
+The conflict panel let any character pick Cast or Arcana even if
+they had no way to channel magic — no staff/wand, no
+"Can cast without staff/wand". The resolve then quietly produced
+zero damage and zero cost. Now:
+
+- New `Character.can_cast_magic(weapon_list)` — True iff the
+  character is innate (`can_cast_without_staff = True`) OR has a
+  weapon flagged `is_staff` in their primary or secondary slot.
+- On every conflict-panel refresh: if the active side can't cast,
+  the **Cast** action button and the **Arcana** atk-type radio
+  are disabled and get a tooltip explaining why. If the
+  currently-selected action / atk-type was Cast / Arcana, it snaps
+  back to Attack / Martial so the resolver doesn't run on a
+  configuration the GM can't actually pick anymore.
+- Smoke + a new test (`test_can_cast_magic_requires_staff_or_innate`)
+  cover plain-sword, innate, staff-primary, and staff-secondary
+  cases.
+
 ## v3.10.7 — Percent passives apply against the effective base
 
 A +50 fixed passive plus a +10% passive on a base-100 health_max
