@@ -1,5 +1,35 @@
 # DnD Manager Changelog
 
+## v3.10.11 — Procs stack; legacy migration; sanity check pass
+
+Two carryover bugs from v3.10.10 fixed, and the proc model rewritten
+to match the user's intent.
+
+- **Equipment passive editors** (weapon `grant_passives` /
+  `inflict_passives`, armor `passives`, item `passives`) use the
+  same `passive_affected_options()` source as the character editor,
+  so the v3.10.10 restriction (max-only) now applies everywhere.
+  Legacy saves whose `affected_value` was `health` / `stamina` /
+  `mana` are **migrated to `_max` on load** by `_hydrate_passive`,
+  so old data shows up correctly in the picker.
+- **Stacking procs**: a non-permanent passive now procs once per
+  turn AND each proc adds another `amount` to the effective max.
+  `Passive.proc_count` (default 1) tracks how many times it has
+  procced; `effective_value` multiplies `amount` by `proc_count`;
+  `change_turn(+1)` increments it before decrementing
+  `turns_remaining`. A "-10 health_max for 3 turns" debuff applies
+  -10 on creation, -20 after one tick, -30 after two, -40 after
+  three, then expires. Permanent passives keep proc_count = 1
+  (apply once and stay).
+- **Sanity check pass** (`_sanity_check_character`): runs after
+  every turn tick. Drops passives with `turns_remaining == 0`,
+  forces `proc_count >= 1`, clamps each current vital into
+  `[0, effective_max]`. Cheap and idempotent — safe to extend with
+  more invariants over time.
+- `per_turn_forecast` simulates the next tick (proc_count + 1,
+  turns_remaining - 1, drop expiring) so the "next turn: ±N
+  (Nt left)" hint reflects the stacking model.
+
 ## v3.10.10 — Passives are max-only; live "Nt left" countdown
 
 Reverted v3.10.9's DoT/HoT model. Per the user's clarified spec,

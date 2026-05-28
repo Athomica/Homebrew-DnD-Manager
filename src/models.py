@@ -53,6 +53,13 @@ class Passive:
     # compatibility but no longer read — the duration field is the
     # source of truth for per-turn behavior in v3.10.4.
     tick_per_turn: bool = False
+    # v3.10.11: how many times this passive has procced. Each proc
+    # adds another `amount` to the effective contribution (so a
+    # -10 health_max passive at proc_count=3 lowers eff max by 30).
+    # Starts at 1 (the initial proc at creation). Increments on
+    # every change_turn(+1) while non-permanent and active.
+    # Permanent passives never tick, so proc_count stays at 1.
+    proc_count: int = 1
 
     def __post_init__(self):
         # Sync turns_remaining from duration ONLY when it's at the

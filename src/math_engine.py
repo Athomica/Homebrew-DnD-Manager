@@ -462,39 +462,42 @@ def passive_sources(character: Character,
 
 def per_turn_forecast(character: Character, vital: str,
                        passives: list) -> tuple[float, list]:
-    """v3.10.10: forecast the change to the effective max of `vital`
-    next turn. Passives only affect *_max — there is no DoT/HoT on
-    current vitals — so this returns the aggregate amount that will
-    fall off when the soonest-expiring non-permanent passives drop
-    on the next `change_turn(+1)`.
+    """v3.10.11: forecast the change to the effective max of `vital`
+    on the next `change_turn(+1)`. Simulates the tick: every active
+    non-permanent passive's `proc_count` increments by 1 (stacking
+    another `amount`), passives with `turns_remaining == 1` expire
+    and drop out.
 
     Returns `(delta, ticking)`:
-      delta    — signed change in effective_max next turn (negative
-                 if a +buff is about to expire, positive if a -debuff
-                 is about to expire).
-      ticking  — list of non-permanent passives still affecting this
+      delta    — signed change in effective_max next turn.
+      ticking  — non-permanent passives still affecting this
                  vital_max (used by the UI to show "Nt left").
     """
+    import copy as _copy
     max_key = f"{vital}_max"
-    expiring: list = []
     ticking: list = []
+    next_state: list = []
     for p in passives:
         if not getattr(p, "active", True):
-            continue
-        if getattr(p, "affected_value", None) != max_key:
+            next_state.append(p)
             continue
         tr = int(getattr(p, "turns_remaining", -1) or -1)
-        if tr <= 0:
+        if tr < 0:
+            next_state.append(p)
             continue
-        ticking.append(p)
+        if tr == 0:
+            continue
+        if getattr(p, "affected_value", None) == max_key:
+            ticking.append(p)
         if tr == 1:
-            expiring.append(p)
-    if not expiring:
-        return 0.0, ticking
+            continue  # expires next turn
+        p2 = _copy.copy(p)
+        p2.proc_count = int(getattr(p, "proc_count", 1) or 1) + 1
+        p2.turns_remaining = tr - 1
+        next_state.append(p2)
     form_max = float(character.vital_max_with_form(vital))
     eff_now, _ = effective_value(form_max, max_key, passives)
-    remaining = [p for p in passives if p not in expiring]
-    eff_next, _ = effective_value(form_max, max_key, remaining)
+    eff_next, _ = effective_value(form_max, max_key, next_state)
     return eff_next - eff_now, ticking
 
 
@@ -520,13 +523,18 @@ def effective_value(base: float, key: str, passives: list) -> tuple[float, float
         if getattr(p, "affected_value", None) != key:
             continue
         # v3.10.10: every active passive (permanent OR non-permanent
-        # with turns_remaining > 0) contributes statically to the
-        # effective max while it's alive. Non-permanent passives that
-        # have already expired (turns_remaining == 0) drop out.
+        # with turns_remaining > 0) contributes to the effective max
+        # while it's alive. Non-permanent passives that have already
+        # expired (turns_remaining == 0) drop out.
         tr = int(getattr(p, "turns_remaining", -1) or -1)
         if tr == 0:
             continue
-        amount = float(getattr(p, "amount", 0.0) or 0.0)
+        # v3.10.11: each proc stacks the effect. A non-permanent
+        # passive's contribution is `amount * proc_count`, where
+        # proc_count increments on every change_turn(+1). Permanent
+        # passives keep proc_count at 1 (apply once).
+        proc_count = max(1, int(getattr(p, "proc_count", 1) or 1))
+        amount = float(getattr(p, "amount", 0.0) or 0.0) * proc_count
         if getattr(p, "scope", "fixed") == "percent":
             pct_sum += amount
         else:

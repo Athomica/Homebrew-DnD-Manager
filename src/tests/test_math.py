@@ -431,11 +431,11 @@ class TestEncounterSystem(unittest.TestCase):
         self.assertTrue(with_wand.can_cast_magic(weapons))
         self.assertTrue(with_wand_secondary.can_cast_magic(weapons))
 
-    def test_non_permanent_max_passive_stays_static_while_active(self):
-        # v3.10.10: a non-permanent passive on *_max contributes
-        # statically to effective_max while active. Current vital is
-        # NEVER touched directly. When the passive expires, the cap
-        # reverts and current is clamped.
+    def test_non_permanent_max_passive_stacks_each_proc(self):
+        # v3.10.11: a non-permanent passive procs each turn and the
+        # amount stacks. -10 health_max for 3 turns → -10 at creation,
+        # -20 after one tick, -30 after two ticks, -40 after three
+        # ticks, then expires. Current is clamped to the cap each turn.
         from models import Passive
         import math_engine as me
         hero = Character(name="X", role="party",
@@ -443,22 +443,42 @@ class TestEncounterSystem(unittest.TestCase):
         self.sm.state.party.append(hero)
         _, _, inst = self.sm.add_character_to_encounter(hero)
         self.sm.assign_to_side(inst.instance_id, "left")
-        # -50 health_max for 1 turn — current/max drops to 150 while
-        # active, current stays at 200 until expiry clamps it.
         inst.character.passives.append(Passive(
-            name="Wither", amount=-50, scope="fixed",
-            affected_value="health_max", duration="turns:1"))
+            name="Wither", amount=-10, scope="fixed",
+            affected_value="health_max", duration="turns:3"))
         ev = me.effective_vitals(
             inst.character, self.sm.state.weapons, self.sm.state.armors,
             self.sm.state.spells, self.sm.state.items)
-        self.assertEqual(ev["health_max"]["effective"], 150)
-        # Advance once: passive still has 1 turn left (current=200 cap=150 — clamp)
+        self.assertEqual(ev["health_max"]["effective"], 190)
         self.sm.change_turn(inst.instance_id, +1)
-        self.assertEqual(inst.character.health_current, 150)
-        # Advance again: passive expires, cap returns to 200, current stays 150.
+        ev = me.effective_vitals(
+            inst.character, self.sm.state.weapons, self.sm.state.armors,
+            self.sm.state.spells, self.sm.state.items)
+        self.assertEqual(ev["health_max"]["effective"], 180)
+        self.assertEqual(inst.character.health_current, 180)
         self.sm.change_turn(inst.instance_id, +1)
-        self.assertEqual(len(inst.character.passives), 0)
-        self.assertEqual(inst.character.health_current, 150)
+        ev = me.effective_vitals(
+            inst.character, self.sm.state.weapons, self.sm.state.armors,
+            self.sm.state.spells, self.sm.state.items)
+        self.assertEqual(ev["health_max"]["effective"], 170)
+        self.assertEqual(inst.character.health_current, 170)
+        # Step back: snapshot restores proc_count and current.
+        self.sm.change_turn(inst.instance_id, -1)
+        ev = me.effective_vitals(
+            inst.character, self.sm.state.weapons, self.sm.state.armors,
+            self.sm.state.spells, self.sm.state.items)
+        self.assertEqual(ev["health_max"]["effective"], 180)
+        self.assertEqual(inst.character.health_current, 180)
+
+    def test_legacy_passive_hydrate_migrates_current_to_max(self):
+        # v3.10.11: legacy saves with affected_value=health/stamina/mana
+        # are migrated to the _max key on load.
+        from state import _hydrate_passive
+        p = _hydrate_passive({
+            "name": "Old Bleed", "amount": -5, "scope": "fixed",
+            "affected_value": "health", "duration": "turns:2",
+        })
+        self.assertEqual(p.affected_value, "health_max")
 
     def test_permanent_passive_stays_static(self):
         # v3.10.9: a permanent passive applies via effective_value

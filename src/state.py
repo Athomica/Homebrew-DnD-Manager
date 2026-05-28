@@ -69,6 +69,14 @@ def _from_dataclass(cls, d: dict):
 
 
 def _hydrate_passive(d: dict) -> Passive:
+    # v3.10.11: migrate legacy current-vital affect targets
+    # (health/stamina/mana) to the _max equivalent. Passives are
+    # now strictly max-only; legacy saves that picked the current
+    # vital pre-v3.10.10 would otherwise show as "?" in the picker.
+    av = d.get("affected_value")
+    if av in ("health", "stamina", "mana"):
+        d = dict(d)
+        d["affected_value"] = f"{av}_max"
     return _from_dataclass(Passive, d)
 
 
@@ -1051,6 +1059,34 @@ class StateManager(QObject):
         if instance_id:
             self.assign_to_side(instance_id, "right")
 
+    def _sanity_check_character(self, character: Character) -> None:
+        """v3.10.11: validate and repair a character's vital state.
+
+        Run after any operation that could leave the character in an
+        inconsistent state — turn ticks, passive edits, HP-loss
+        application, etc. Currently:
+          - Drops passives whose `turns_remaining == 0` (expired but
+            still on the list).
+          - Clamps every current vital to `[0, effective_max]` for
+            that vital.
+          - Ensures `proc_count >= 1`.
+        Idempotent and cheap; safe to call defensively.
+        """
+        # Drop expired passives (turns_remaining == 0). Permanent (-1)
+        # and active non-permanent (>0) survive.
+        character.passives = [
+            p for p in character.passives
+            if int(getattr(p, "turns_remaining", -1) or -1) != 0
+        ]
+        for p in character.passives:
+            if int(getattr(p, "proc_count", 1) or 0) < 1:
+                p.proc_count = 1
+        for v in ("health", "stamina", "mana"):
+            cur_attr = f"{v}_current"
+            cur = int(getattr(character, cur_attr, 0) or 0)
+            eff_max = self._effective_max(character, v)
+            setattr(character, cur_attr, max(0, min(cur, eff_max)))
+
     def _effective_max(self, character: Character, vital: str) -> int:
         """v3.9.5: shared helper — return the EFFECTIVE max of a vital
         (passives + form mults applied) as an int. Used to clamp heals
@@ -1190,25 +1226,26 @@ class StateManager(QObject):
                     "stamina_current": int(char.stamina_current),
                     "mana_current": int(char.mana_current),
                 }
-                # 2. Tick non-permanent passives and drop expired.
+                # 2. v3.10.11: for non-permanent active passives,
+                # bump proc_count BEFORE ticking turns_remaining so
+                # the next effective_value evaluation reflects the
+                # stacked effect, then decrement turns_remaining and
+                # drop entries that reach 0.
                 kept: list = []
                 for p in char.passives:
                     if getattr(p, "turns_remaining", -1) < 0:
                         kept.append(p); continue  # permanent
+                    if getattr(p, "active", True):
+                        p.proc_count = int(getattr(p, "proc_count", 1) or 1) + 1
                     p.turns_remaining = max(0, int(p.turns_remaining) - 1)
                     if p.turns_remaining > 0:
                         kept.append(p)
                 char.passives = kept
-                # v3.10.10: no DoT/HoT loop — passives are max-only.
-                # Clamp current vitals to the new effective max in
-                # case an expiring +max buff dropped the ceiling below
-                # the current value.
-                for v in ("health", "stamina", "mana"):
-                    cur_attr = f"{v}_current"
-                    cur = int(getattr(char, cur_attr, 0) or 0)
-                    eff_max = int(round(self._effective_max(char, v)))
-                    if cur > eff_max:
-                        setattr(char, cur_attr, max(0, eff_max))
+                # 3. Sanity check: clamp every current vital to the
+                # (possibly updated) effective max so an expiring +max
+                # buff or a freshly-stacked -max debuff doesn't leave
+                # current above the new ceiling.
+                self._sanity_check_character(char)
                 inst.turn += 1
                 self.state.total_turns = max(0, self.state.total_turns + 1)
         elif delta < 0:
