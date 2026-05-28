@@ -1477,6 +1477,11 @@ class ConflictPanel(QGroupBox):
                 enc.left_pending_form_id = fid
             else:
                 enc.right_pending_form_id = fid
+            # v3.9.9: broadcast so the Player View (and any other
+            # listener) mirrors the GM's mid-conflict selection in
+            # real time. Previously these handlers only ran the local
+            # refresh(), so the player-side window stayed stale.
+            self._state.encounter_changed.emit()
         return handler
 
     def _on_use_shield_factory(self, side: str):
@@ -1488,7 +1493,7 @@ class ConflictPanel(QGroupBox):
                 enc.left_use_shield = checked
             else:
                 enc.right_use_shield = checked
-            self.refresh()
+            self._state.encounter_changed.emit()
         return handler
 
     def _on_action_toggled_factory(self, side: str, key: str):
@@ -1502,7 +1507,7 @@ class ConflictPanel(QGroupBox):
                 enc.left_action = key
             else:
                 enc.right_action = key
-            self.refresh()
+            self._state.encounter_changed.emit()
         return handler
 
     def _on_atk_toggled_factory(self, side: str, key: str):
@@ -1516,7 +1521,7 @@ class ConflictPanel(QGroupBox):
                 enc.left_atk_selection = key
             else:
                 enc.right_atk_selection = key
-            self.refresh()
+            self._state.encounter_changed.emit()
         return handler
 
     def refresh(self) -> None:

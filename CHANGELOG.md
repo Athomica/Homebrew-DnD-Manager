@@ -1,5 +1,29 @@
 # DnD Manager Changelog
 
+## v3.9.9 — Player View mirrors conflict actions in real time
+
+The Player View (v3.9.8) updated when characters took damage or
+shifted form, but it ignored the GM's action-picker selections (Attack
+/ Block / Cast / Dodge / Shift, ATK type, Use-Shield checkbox, Shift
+target form). Reason: each of the four ConflictPanel action handlers
+mutated `enc.left_action` etc. directly and called a LOCAL
+`self.refresh()` — never `state.encounter_changed.emit()`, so the
+player view's panel had no idea to refresh.
+
+Fix: every action handler now broadcasts through
+`state.encounter_changed.emit()`:
+
+- `_on_action_toggled_factory` — Attack / Block / Cast / Dodge / Shift
+- `_on_atk_toggled_factory` — martial / ranged / arcana / stealth
+- `_on_use_shield_factory` — Use Shield checkbox
+- `_on_shift_form_factory` — Shift-to form picker
+
+The local refresh still happens because the conflict panel itself is
+subscribed to `encounter_changed`, so there's no double-refresh.
+
+Verified: clicking Block on the main UI's left side immediately swaps
+the player view's left-side action chip from `⚔ Attack` to `🛡 Block`.
+
 ## v3.9.8 — Player View window
 
 A read-only mirror of the active encounter the GM can open and show
