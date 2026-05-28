@@ -1137,18 +1137,87 @@ class StateManager(QObject):
         return True, ""
 
     def change_turn(self, instance_id: str, delta: int) -> tuple[bool, str]:
+        """v3.10.4: turn change drives the per-character passive
+        countdown AND snapshots the pre-tick state so the GM can
+        rewind.
+
+        +delta = advance:
+          1. Snapshot a deep copy of the current `character.passives`
+             list under the OLD turn number so a later step-back can
+             restore it.
+          2. Tick every non-permanent passive: decrement
+             `turns_remaining` by 1, drop entries that reach 0. (A
+             permanent passive has `turns_remaining = -1` and is
+             ignored.)
+          3. Apply DoT/HoT: any passive that targets a CURRENT
+             vital (`health`, `stamina`, `mana`) and is still active
+             after the tick subtracts/adds its amount to the
+             corresponding `*_current` field.
+          4. Bump `inst.turn` by delta.
+        -delta = step back:
+          1. If a snapshot for the destination turn exists, restore
+             `character.passives` from it (deep-copied so future
+             ticks don't mutate the snapshot through aliasing). Drop
+             the snapshot for the destination turn so a subsequent
+             advance re-snapshots fresh.
+          2. Bump `inst.turn` by delta.
+        """
         ok, msg = self.can_change_turn(instance_id, delta)
         if not ok:
             return False, msg
         inst = self.get_instance(instance_id)
         if inst is None:
             return False, "instance gone"
-        inst.turn += delta
-        self.state.total_turns = max(0, self.state.total_turns + delta)
+        import copy as _copy
+        char = inst.character
+        if delta > 0:
+            for _ in range(int(delta)):
+                # 1. Snapshot current passive state BEFORE ticking.
+                inst.turn_snapshots[int(inst.turn)] = _copy.deepcopy(
+                    char.passives)
+                # 2. Tick non-permanent passives and drop expired.
+                kept: list = []
+                for p in char.passives:
+                    if getattr(p, "turns_remaining", -1) < 0:
+                        kept.append(p); continue  # permanent
+                    p.turns_remaining = max(0, int(p.turns_remaining) - 1)
+                    if p.turns_remaining > 0:
+                        kept.append(p)
+                char.passives = kept
+                # 3. Apply DoT/HoT to current vitals.
+                for p in char.passives:
+                    if not getattr(p, "active", True):
+                        continue
+                    if getattr(p, "turns_remaining", -1) == 0:
+                        continue  # already expired (shouldn't be here)
+                    av = getattr(p, "affected_value", "") or ""
+                    if av not in ("health", "stamina", "mana"):
+                        continue
+                    cur_attr = f"{av}_current"
+                    cur = float(getattr(char, cur_attr, 0) or 0)
+                    amount = float(getattr(p, "amount", 0) or 0)
+                    if getattr(p, "scope", "fixed") == "percent":
+                        delta_v = cur * (amount / 100.0)
+                    else:
+                        delta_v = amount
+                    eff_max = self._effective_max(char, av)
+                    new = max(0, min(eff_max, cur + delta_v))
+                    setattr(char, cur_attr, int(round(new)))
+                inst.turn += 1
+                self.state.total_turns = max(0, self.state.total_turns + 1)
+        elif delta < 0:
+            for _ in range(int(-delta)):
+                new_turn = max(0, inst.turn - 1)
+                snap = inst.turn_snapshots.pop(new_turn, None)
+                if snap is not None:
+                    char.passives = _copy.deepcopy(snap)
+                inst.turn = new_turn
+                self.state.total_turns = max(0, self.state.total_turns - 1)
         self.log_event("turn_advance",
-                       f"'{inst.character.name}' turn {inst.turn} "
+                       f"'{char.name}' turn {inst.turn} "
                        f"(total {self.state.total_turns})",
                        category="combat")
+        self.character_changed.emit(char.id)
         self.encounter_changed.emit()
         return True, ""
 

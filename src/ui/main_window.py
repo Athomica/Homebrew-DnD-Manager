@@ -31,7 +31,7 @@ from ui.components.scaling_modifiers import ScalingModifiersPanel
 
 
 class MainWindow(QMainWindow):
-    BASE_TITLE = "DnD Manager v3.10.3"
+    BASE_TITLE = "DnD Manager v3.10.4"
 
     def __init__(self) -> None:
         super().__init__()
@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         QMessageBox.about(
             self, "About DnD Manager",
-            "DnD Manager v3.10.3\n\n"
+            "DnD Manager v3.10.4\n\n"
             "A solo Dungeon Master's tool for a homebrew dark-fantasy TTRPG.\n\n"
             "Targets KDE Plasma on Wayland (X11 fallback) on Linux.\n"
             "No dice rolling, no networking, no AI."

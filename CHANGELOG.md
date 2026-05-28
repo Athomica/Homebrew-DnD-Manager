@@ -1,5 +1,61 @@
 # DnD Manager Changelog
 
+## v3.10.4 — Turn ticks + passive snapshots; "per turn" checkbox gone
+
+### "per turn" checkbox removed
+The duration field already conveys per-turn intent — "Single use"
+and "For N turns" obviously imply a per-turn lifecycle. The
+checkbox was redundant. The `tick_per_turn` model field stays on
+the dataclass for save-file compatibility but is no longer read.
+
+### Duration semantics, clarified
+- **Single use** — active this turn only; gone next turn.
+- **For N turns** — active for the CURRENT turn plus N more.
+- **Permanent** — never expires.
+
+Stored as a new `Passive.turns_remaining` int:
+- permanent / manual → `-1`
+- single → `1`
+- turns:N → `N + 1`
+
+`__post_init__` derives `turns_remaining` from `duration` for any
+passive that doesn't carry it explicitly — legacy saves and
+weapon-inflicted copies both get the right countdown.
+
+### Current vitals back as passive affect targets
+Re-added `health`, `stamina`, `mana` to the passive dropdown. A
+passive targeting a CURRENT vital is a DoT/HoT — its amount ticks
+on every `change_turn(+1)`. A passive targeting `*_max` or a
+proficiency is a temporary static modifier while active.
+
+### Turn snapshots + ticking
+`change_turn(instance, +delta)` now:
+1. **Snapshots** `character.passives` under the OLD turn number
+   (`EncounterInstance.turn_snapshots[old_turn]`).
+2. Decrements every non-permanent passive's `turns_remaining` and
+   drops entries that reach 0.
+3. Applies **DoT/HoT**: any surviving passive that targets a
+   current vital subtracts/adds its amount to the corresponding
+   `*_current` field, clamped to `[0, effective_max]`.
+4. Bumps `inst.turn`.
+
+`change_turn(instance, -delta)`:
+1. If a snapshot exists for the destination turn, restores
+   `character.passives` from it (deep-copy, so future ticks don't
+   alias the snapshot).
+2. Pops that snapshot so a re-advance produces a fresh one.
+3. Bumps `inst.turn` downward.
+
+Effect: stepping back in turns truly RESTORES the previous state,
+not just decrements counters. The user can advance multiple turns,
+see DoT damage land, then step back to undo it all.
+
+### Tests
+- `test_turn_advance_ticks_passives_and_snapshots` exercises the
+  Bleed flow and the snapshot/restore round-trip.
+- `test_turn_advance_expires_short_passive` covers Single-use
+  expiry on the very next turn.
+
 ## v3.10.3 — Equipment passives realtime; Cast target picker; placeholder dropdowns; exit-conflict fix
 
 ### Equipment-derived passive list updates in real time

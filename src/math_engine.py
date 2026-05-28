@@ -462,26 +462,29 @@ def passive_sources(character: Character,
 
 def per_turn_forecast(character: Character, vital: str,
                        passives: list) -> tuple[float, list]:
-    """v3.9.2 (B4) / v3.9.4: forecast the per-turn delta on a current
-    vital from any active passives flagged `tick_per_turn`.
+    """v3.10.4: forecast the per-turn delta on a `vital` (`health`,
+    `stamina`, or `mana`) from any non-permanent passive that
+    targets the current value of that vital.
 
-    Static-only affect targets (v3.9.4) are now the max-vitals
-    (`health_max`, `stamina_max`, `mana_max`) — current vitals were
-    removed because editing the current value is a direct vital-bar
-    operation, not a passive. For DoT/HoT effects, tick_per_turn=True
-    on a `_max` target means "tick the CURRENT value of that vital by
-    `amount` each turn". A Bleed -5 health_max + tick_per_turn=True
-    drains 5 current health each round; a +3 stamina_max + tick
-    regenerates 3 current stamina.
+    The `tick_per_turn` checkbox was removed — duration is now the
+    source of truth. A passive with `turns_remaining > 0` and
+    `affected_value` matching the current vital ticks on every
+    `change_turn(+1)` call; this function just previews what the
+    next tick will be.
     """
     ticking = []
     cur_base = float(getattr(character, f"{vital}_current", 0) or 0)
     delta = 0.0
-    target_keys = (vital, f"{vital}_max")
     for p in passives:
-        if not getattr(p, "tick_per_turn", False):
+        if not getattr(p, "active", True):
             continue
-        if getattr(p, "affected_value", None) not in target_keys:
+        # Permanent passives don't tick (they apply statically via
+        # effective_value).
+        if getattr(p, "turns_remaining", -1) < 0:
+            continue
+        if getattr(p, "turns_remaining", -1) == 0:
+            continue
+        if getattr(p, "affected_value", None) != vital:
             continue
         amount = float(getattr(p, "amount", 0.0) or 0.0)
         if getattr(p, "scope", "fixed") == "percent":
@@ -505,9 +508,12 @@ def effective_value(base: float, key: str, passives: list) -> tuple[float, float
     for p in passives:
         if getattr(p, "affected_value", None) != key:
             continue
-        # v3.9.2 (B4): tick_per_turn passives are forecast-only — they
-        # apply on each turn advance, not statically to the value.
-        if getattr(p, "tick_per_turn", False):
+        # v3.10.4: passives targeting a current vital (health, stamina,
+        # mana) are DoT/HoT — they don't shift the effective value
+        # statically, they tick on turn-advance via change_turn(). So
+        # we skip them here. Max-vital and proficiency passives still
+        # contribute statically while active.
+        if key in ("health", "stamina", "mana"):
             continue
         amount = float(getattr(p, "amount", 0.0) or 0.0)
         if getattr(p, "scope", "fixed") == "percent":

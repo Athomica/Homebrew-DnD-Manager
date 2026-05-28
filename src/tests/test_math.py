@@ -378,6 +378,54 @@ class TestEncounterSystem(unittest.TestCase):
         new_one = self.sm.state.mobs[-1]
         self.assertFalse(new_one.is_template)
 
+    def test_turn_advance_ticks_passives_and_snapshots(self):
+        # v3.10.4: a non-permanent passive's turns_remaining ticks
+        # down each turn; rewinding restores the snapshotted state.
+        from models import Passive
+        hero = Character(name="Bleeder", role="party", health_max=200,
+                          health_current=200, stamina_max=100,
+                          stamina_current=100, mana_max=100)
+        self.sm.state.party.append(hero)
+        _, _, inst = self.sm.add_character_to_encounter(hero)
+        self.sm.assign_to_side(inst.instance_id, "left")
+        # Bleed: -10 health every turn for 3 turns (turns_remaining = 4)
+        bleed = Passive(name="Bleed", amount=-10, scope="fixed",
+                          affected_value="health", duration="turns:3")
+        inst.character.passives.append(bleed)
+        self.assertEqual(bleed.turns_remaining, 4)  # set by __post_init__
+        start_hp = inst.character.health_current
+        # Advance one turn → snapshot, tick, apply DoT.
+        ok, _ = self.sm.change_turn(inst.instance_id, +1)
+        self.assertTrue(ok)
+        self.assertEqual(inst.character.health_current, start_hp - 10)
+        # Passive should now have turns_remaining = 3.
+        self.assertEqual(inst.character.passives[0].turns_remaining, 3)
+        # Snapshot of turn 0 should hold the original passive intact.
+        self.assertIn(0, inst.turn_snapshots)
+        self.assertEqual(inst.turn_snapshots[0][0].turns_remaining, 4)
+        # Step back → restore turn 0 state.
+        ok, _ = self.sm.change_turn(inst.instance_id, -1)
+        self.assertTrue(ok)
+        self.assertEqual(inst.turn, 0)
+        self.assertEqual(inst.character.passives[0].turns_remaining, 4)
+        # The snapshot is consumed on rewind so a re-advance re-snapshots.
+        self.assertNotIn(0, inst.turn_snapshots)
+
+    def test_turn_advance_expires_short_passive(self):
+        # v3.10.4: a "Single use" passive lives for the current turn
+        # only — advancing one turn must drop it from the list.
+        from models import Passive
+        hero = Character(name="X", role="party")
+        self.sm.state.party.append(hero)
+        _, _, inst = self.sm.add_character_to_encounter(hero)
+        self.sm.assign_to_side(inst.instance_id, "left")
+        inst.character.passives.append(
+            Passive(name="Flash", amount=5, scope="fixed",
+                    affected_value="martial_sp", duration="single"))
+        self.sm.change_turn(inst.instance_id, +1)
+        self.assertEqual(len(inst.character.passives), 0,
+                          "Single-use passive should expire after one turn")
+
     def test_end_encounter_skips_orphan_template_instance(self):
         # v3.10.2: a template added but NEVER assigned must not be
         # promoted to a unique character. Prevents the "phantom

@@ -10,6 +10,30 @@ def new_id(prefix: str = "id") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+def duration_to_turns_remaining(duration: str) -> int:
+    """v3.10.4: convert a duration string to the initial
+    `turns_remaining` value used by the turn-tick countdown.
+
+    permanent  -> -1   (never expires)
+    manual     -> -1   (only the GM clears it; treat as permanent
+                       for tick purposes)
+    single     ->  1   (active this turn, gone next)
+    turns:N    -> N+1  (current + N more turns)
+    """
+    d = (duration or "").strip().lower()
+    if d in ("", "permanent", "manual"):
+        return -1
+    if d == "single":
+        return 1
+    if d.startswith("turns:"):
+        try:
+            n = int(d.split(":", 1)[1])
+        except ValueError:
+            return -1
+        return max(0, n) + 1
+    return -1
+
+
 @dataclass
 class Passive:
     id: str = field(default_factory=lambda: new_id("p"))
@@ -21,13 +45,26 @@ class Passive:
     duration: str = "permanent"
     source: str = "character"
     active: bool = True
-    # v3.9.2 (B4): when True, the passive's `amount` is treated as a
-    # PER-TURN tick rather than a one-time static modifier. Used for
-    # bleed / regen-style status effects. The static effective-value
-    # math ignores tick_per_turn passives (they don't change the
-    # current vital until the turn actually advances); UI displays a
-    # forecast "next turn: ΔN (Nt left)" beside the affected vital.
+    # v3.10.4: turns_remaining drives the expiry countdown. Sentinel
+    # `-1` = permanent (always active); `>= 1` = active for N more
+    # turn ticks; `0` = expired (should be removed from the list).
+    turns_remaining: int = -1
+    # Legacy v3.9.2 (B4) field. Kept on the dataclass for save-file
+    # compatibility but no longer read — the duration field is the
+    # source of truth for per-turn behavior in v3.10.4.
     tick_per_turn: bool = False
+
+    def __post_init__(self):
+        # Sync turns_remaining from duration ONLY when it's at the
+        # default sentinel (-1) and duration is non-permanent. This
+        # catches legacy saves (no turns_remaining field) and weapon
+        # `inflict_passives` templates copied onto a victim without
+        # going through the editor. Editor-saved passives have
+        # turns_remaining set explicitly and aren't touched here.
+        if self.turns_remaining == -1:
+            derived = duration_to_turns_remaining(self.duration)
+            if derived >= 0:
+                self.turns_remaining = derived
 
 
 @dataclass
@@ -208,14 +245,14 @@ ARMOR_SLOTS = ("helmet", "chest", "gloves", "pants", "boots")
 
 
 def passive_affected_options() -> list[tuple[str, list[str]]]:
-    # v3.9.4: current vitals (health/stamina/mana) removed as static
-    # affect targets — modifying them statically is just "set the
-    # current value", which is editable directly on the vital bar.
-    # Passives only move the MAX of a vital (which then implies the
-    # effective cap follows). For DoT/HoT effects, use a passive that
-    # targets the max + flip tick_per_turn (the per-turn forecast still
-    # ticks the current vital each round).
-    vitals = ["health_max", "stamina_max", "mana_max"]
+    # v3.10.4: current vitals (health/stamina/mana) are back as affect
+    # options. A non-permanent passive targeting one is a DoT/HoT —
+    # its amount ticks each turn until the duration expires (Bleed
+    # -5 health, "For 3 turns" = lose 5 health each of the next 3
+    # turns). A non-permanent passive targeting *_max or a
+    # proficiency is a temporary static buff/debuff.
+    vitals = ["health", "health_max", "stamina", "stamina_max",
+              "mana", "mana_max"]
     prof_attrs = ("throw", "sp")
     profs: list[str] = []
     for p in PROFICIENCIES:
@@ -464,6 +501,11 @@ class EncounterInstance:
     turn: int = 0
     is_in_bin: bool = False
     dice_history: list[int] = field(default_factory=list)
+    # v3.10.4: snapshots of character.passives keyed by turn integer.
+    # When the GM advances a turn we save the BEFORE state under
+    # the old turn number, then tick + drop expired passives. When
+    # they step back, we restore from the snapshot for the new turn.
+    turn_snapshots: dict = field(default_factory=dict)
 
 
 @dataclass
