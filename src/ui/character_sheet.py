@@ -1616,17 +1616,14 @@ class CharacterSheet(QWidget):
                             ("stamina", self._stam_bar),
                             ("mana", self._mana_bar)):
             delta, ticking = me.per_turn_forecast(self._char, vital, all_p)
-            # Earliest expiring turn-counted passive — use as the
-            # "turns left" hint. Permanent ticks are open-ended.
+            # v3.10.10: read live turns_remaining (the per-turn ticker
+            # decrements it) instead of the original duration, so the
+            # "Nt left" hint shrinks as turns advance.
             turns_left = None
             for p in ticking:
-                d = (getattr(p, "duration", "") or "")
-                if d.startswith("turns:"):
-                    try:
-                        n = int(d.split(":", 1)[1])
-                        turns_left = n if turns_left is None else min(turns_left, n)
-                    except ValueError:
-                        pass
+                tr = int(getattr(p, "turns_remaining", -1) or -1)
+                if tr > 0:
+                    turns_left = tr if turns_left is None else min(turns_left, tr)
             bar.set_tick_forecast(delta, turns_left)
 
     def _refresh_derived(self) -> None:

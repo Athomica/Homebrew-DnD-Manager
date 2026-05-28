@@ -462,42 +462,40 @@ def passive_sources(character: Character,
 
 def per_turn_forecast(character: Character, vital: str,
                        passives: list) -> tuple[float, list]:
-    """v3.10.4: forecast the per-turn delta on a `vital` (`health`,
-    `stamina`, or `mana`) from any non-permanent passive that
-    targets the current value of that vital.
+    """v3.10.10: forecast the change to the effective max of `vital`
+    next turn. Passives only affect *_max — there is no DoT/HoT on
+    current vitals — so this returns the aggregate amount that will
+    fall off when the soonest-expiring non-permanent passives drop
+    on the next `change_turn(+1)`.
 
-    The `tick_per_turn` checkbox was removed — duration is now the
-    source of truth. A passive with `turns_remaining > 0` and
-    `affected_value` matching the current vital ticks on every
-    `change_turn(+1)` call; this function just previews what the
-    next tick will be.
+    Returns `(delta, ticking)`:
+      delta    — signed change in effective_max next turn (negative
+                 if a +buff is about to expire, positive if a -debuff
+                 is about to expire).
+      ticking  — list of non-permanent passives still affecting this
+                 vital_max (used by the UI to show "Nt left").
     """
-    ticking = []
-    cur_base = float(getattr(character, f"{vital}_current", 0) or 0)
-    delta = 0.0
+    max_key = f"{vital}_max"
+    expiring: list = []
+    ticking: list = []
     for p in passives:
         if not getattr(p, "active", True):
             continue
-        # Permanent passives don't tick (they apply statically via
-        # effective_value).
-        if getattr(p, "turns_remaining", -1) < 0:
+        if getattr(p, "affected_value", None) != max_key:
             continue
-        if getattr(p, "turns_remaining", -1) == 0:
+        tr = int(getattr(p, "turns_remaining", -1) or -1)
+        if tr <= 0:
             continue
-        # v3.10.9: match BOTH the current-vital key and its `_max`
-        # partner. Non-permanent passives targeting `health_max`
-        # tick on `health_current` (and similarly for stamina /
-        # mana), per the "non-permanent procs each turn" spec.
-        av = getattr(p, "affected_value", None)
-        if av not in (vital, f"{vital}_max"):
-            continue
-        amount = float(getattr(p, "amount", 0.0) or 0.0)
-        if getattr(p, "scope", "fixed") == "percent":
-            delta += cur_base * (amount / 100.0)
-        else:
-            delta += amount
         ticking.append(p)
-    return delta, ticking
+        if tr == 1:
+            expiring.append(p)
+    if not expiring:
+        return 0.0, ticking
+    form_max = float(character.vital_max_with_form(vital))
+    eff_now, _ = effective_value(form_max, max_key, passives)
+    remaining = [p for p in passives if p not in expiring]
+    eff_next, _ = effective_value(form_max, max_key, remaining)
+    return eff_next - eff_now, ticking
 
 
 def effective_value(base: float, key: str, passives: list) -> tuple[float, float]:
@@ -521,18 +519,12 @@ def effective_value(base: float, key: str, passives: list) -> tuple[float, float
     for p in passives:
         if getattr(p, "affected_value", None) != key:
             continue
-        # v3.10.4 / v3.10.9: per the user's "non-permanent procs each
-        # turn" spec, ONLY permanent (and manual) passives apply
-        # statically here — non-permanent ones tick on each
-        # change_turn(+1) instead. Permanent is signalled by
-        # turns_remaining < 0 (set by Passive.__post_init__ from the
-        # duration field).
-        if int(getattr(p, "turns_remaining", -1) or -1) >= 0:
-            continue
-        # Passives targeting a current vital tick on turn-advance —
-        # they don't contribute statically here either (they're
-        # already filtered above, but keep the safety net).
-        if key in ("health", "stamina", "mana"):
+        # v3.10.10: every active passive (permanent OR non-permanent
+        # with turns_remaining > 0) contributes statically to the
+        # effective max while it's alive. Non-permanent passives that
+        # have already expired (turns_remaining == 0) drop out.
+        tr = int(getattr(p, "turns_remaining", -1) or -1)
+        if tr == 0:
             continue
         amount = float(getattr(p, "amount", 0.0) or 0.0)
         if getattr(p, "scope", "fixed") == "percent":

@@ -379,39 +379,36 @@ class TestEncounterSystem(unittest.TestCase):
         self.assertFalse(new_one.is_template)
 
     def test_turn_advance_ticks_passives_and_snapshots(self):
-        # v3.10.4: a non-permanent passive's turns_remaining ticks
-        # down each turn; rewinding restores the snapshotted state.
+        # v3.10.10: passives only affect *_max. A non-permanent
+        # passive's turns_remaining ticks down each turn; rewinding
+        # restores the snapshotted state. Current vitals are NOT
+        # touched directly.
         from models import Passive
-        hero = Character(name="Bleeder", role="party", health_max=200,
+        hero = Character(name="Buffed", role="party", health_max=200,
                           health_current=200, stamina_max=100,
                           stamina_current=100, mana_max=100)
         self.sm.state.party.append(hero)
         _, _, inst = self.sm.add_character_to_encounter(hero)
         self.sm.assign_to_side(inst.instance_id, "left")
-        # Bleed: -10 health every turn for 3 turns (turns_remaining = 4)
-        bleed = Passive(name="Bleed", amount=-10, scope="fixed",
-                          affected_value="health", duration="turns:3")
-        inst.character.passives.append(bleed)
-        self.assertEqual(bleed.turns_remaining, 4)  # set by __post_init__
+        # +30 health_max for 3 turns (turns_remaining = 4)
+        buff = Passive(name="Toughen", amount=30, scope="fixed",
+                       affected_value="health_max", duration="turns:3")
+        inst.character.passives.append(buff)
+        self.assertEqual(buff.turns_remaining, 4)
         start_hp = inst.character.health_current
-        # Advance one turn → snapshot, tick, apply DoT.
         ok, _ = self.sm.change_turn(inst.instance_id, +1)
         self.assertTrue(ok)
-        self.assertEqual(inst.character.health_current, start_hp - 10)
-        # Passive should now have turns_remaining = 3.
+        # Current vital unchanged — no DoT/HoT.
+        self.assertEqual(inst.character.health_current, start_hp)
         self.assertEqual(inst.character.passives[0].turns_remaining, 3)
-        # Snapshot of turn 0 should hold the original passive intact.
         self.assertIn(0, inst.turn_snapshots)
         snap = inst.turn_snapshots[0]
-        # v3.10.6: snapshot stores passives + vitals as a dict.
         self.assertEqual(snap["passives"][0].turns_remaining, 4)
         self.assertEqual(snap["health_current"], start_hp)
-        # Step back → restore turn 0 state.
         ok, _ = self.sm.change_turn(inst.instance_id, -1)
         self.assertTrue(ok)
         self.assertEqual(inst.turn, 0)
         self.assertEqual(inst.character.passives[0].turns_remaining, 4)
-        # The snapshot is consumed on rewind so a re-advance re-snapshots.
         self.assertNotIn(0, inst.turn_snapshots)
 
     def test_can_cast_magic_requires_staff_or_innate(self):
@@ -434,23 +431,34 @@ class TestEncounterSystem(unittest.TestCase):
         self.assertTrue(with_wand.can_cast_magic(weapons))
         self.assertTrue(with_wand_secondary.can_cast_magic(weapons))
 
-    def test_non_permanent_max_passive_ticks_current(self):
-        # v3.10.9: a non-permanent passive targeting a *_max key
-        # ticks on the corresponding current vital each turn,
-        # per the "non-permanent procs each turn" spec.
+    def test_non_permanent_max_passive_stays_static_while_active(self):
+        # v3.10.10: a non-permanent passive on *_max contributes
+        # statically to effective_max while active. Current vital is
+        # NEVER touched directly. When the passive expires, the cap
+        # reverts and current is clamped.
         from models import Passive
+        import math_engine as me
         hero = Character(name="X", role="party",
                           health_max=200, health_current=200)
         self.sm.state.party.append(hero)
         _, _, inst = self.sm.add_character_to_encounter(hero)
         self.sm.assign_to_side(inst.instance_id, "left")
-        # "Wither" -5 health_max for 2 turns → drains 5 current
-        # each tick (not a static -5 to max).
+        # -50 health_max for 1 turn — current/max drops to 150 while
+        # active, current stays at 200 until expiry clamps it.
         inst.character.passives.append(Passive(
-            name="Wither", amount=-5, scope="fixed",
-            affected_value="health_max", duration="turns:2"))
+            name="Wither", amount=-50, scope="fixed",
+            affected_value="health_max", duration="turns:1"))
+        ev = me.effective_vitals(
+            inst.character, self.sm.state.weapons, self.sm.state.armors,
+            self.sm.state.spells, self.sm.state.items)
+        self.assertEqual(ev["health_max"]["effective"], 150)
+        # Advance once: passive still has 1 turn left (current=200 cap=150 — clamp)
         self.sm.change_turn(inst.instance_id, +1)
-        self.assertEqual(inst.character.health_current, 195)
+        self.assertEqual(inst.character.health_current, 150)
+        # Advance again: passive expires, cap returns to 200, current stays 150.
+        self.sm.change_turn(inst.instance_id, +1)
+        self.assertEqual(len(inst.character.passives), 0)
+        self.assertEqual(inst.character.health_current, 150)
 
     def test_permanent_passive_stays_static(self):
         # v3.10.9: a permanent passive applies via effective_value

@@ -1,5 +1,30 @@
 # DnD Manager Changelog
 
+## v3.10.10 — Passives are max-only; live "Nt left" countdown
+
+Reverted v3.10.9's DoT/HoT model. Per the user's clarified spec,
+passives affect the **effective max** of a vital and nothing else —
+they never modify the current value directly.
+
+- **Affect targets** are now strictly `health_max`, `stamina_max`,
+  `mana_max` and the proficiency keys. The current-vital options
+  (`health`, `stamina`, `mana`) were removed from the picker.
+- **Non-permanent passive** stays applied to effective max while
+  `turns_remaining > 0`; on the turn it expires the max reverts and
+  current is clamped to fit.
+- **Permanent passive** applies once and stays in effect (no tick).
+- **`change_turn(+1)`** snapshots state, decrements `turns_remaining`,
+  drops expired passives, then clamps current to the new effective
+  max. The DoT/HoT loop is gone.
+- **"next turn: ±N (Nt left)" indicator** next to each vital bar
+  now reads `turns_remaining` directly (was reading the original
+  `duration` string), so the countdown shrinks live as the passive
+  is edited or as turns advance.
+- `per_turn_forecast` now reports the **net change to effective
+  max** the next turn will bring (a +30 buff with 1 turn left
+  forecasts a -30 next turn), and the soonest-expiring passive
+  drives the "left" hint.
+
 ## v3.10.9 — Non-permanent procs each turn; permanent stays static
 
 Tightened to the user's spec:

@@ -245,14 +245,11 @@ ARMOR_SLOTS = ("helmet", "chest", "gloves", "pants", "boots")
 
 
 def passive_affected_options() -> list[tuple[str, list[str]]]:
-    # v3.10.4: current vitals (health/stamina/mana) are back as affect
-    # options. A non-permanent passive targeting one is a DoT/HoT —
-    # its amount ticks each turn until the duration expires (Bleed
-    # -5 health, "For 3 turns" = lose 5 health each of the next 3
-    # turns). A non-permanent passive targeting *_max or a
-    # proficiency is a temporary static buff/debuff.
-    vitals = ["health", "health_max", "stamina", "stamina_max",
-              "mana", "mana_max"]
+    # v3.10.10: passives can only modify the EFFECTIVE MAX of a vital.
+    # They never touch the current value directly. A non-permanent
+    # passive stays applied while active and falls off on expiry; a
+    # permanent passive applies once and stays in effect.
+    vitals = ["health_max", "stamina_max", "mana_max"]
     prof_attrs = ("throw", "sp")
     profs: list[str] = []
     for p in PROFICIENCIES:

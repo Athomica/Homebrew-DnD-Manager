@@ -1276,15 +1276,12 @@ class CompactCharacterCard(QFrame):
                             ("stamina", self._stam_bar),
                             ("mana", self._mana_bar)):
             delta, ticking = me.per_turn_forecast(c, vital, all_p)
+            # v3.10.10: read live turns_remaining so the hint counts down.
             turns_left = None
             for p in ticking:
-                d = (getattr(p, "duration", "") or "")
-                if d.startswith("turns:"):
-                    try:
-                        n = int(d.split(":", 1)[1])
-                        turns_left = n if turns_left is None else min(turns_left, n)
-                    except ValueError:
-                        pass
+                tr = int(getattr(p, "turns_remaining", -1) or -1)
+                if tr > 0:
+                    turns_left = tr if turns_left is None else min(turns_left, tr)
             bar.set_tick_forecast(delta, turns_left)
         # v3.9.8: skip the fall-row sync entirely in viewer mode — the
         # widgets were never added to the layout and Qt has reclaimed
