@@ -1186,24 +1186,29 @@ class StateManager(QObject):
 
     def _action_costs(self, character: Character, selection: str,
                        weapon_override=None, spell_override=None) -> tuple[int, int]:
-        """v3.10: stamina+mana cost of using `selection` ATK. With
-        `weapon_override` / `spell_override`, the cost comes from the
-        explicitly-chosen weapon / spell instead of the character's
-        currently-equipped default. The conflict panel passes the
-        per-side picker choice; resolve uses the same."""
-        w = weapon_override if weapon_override is not None else character.get_active_weapon(self.state.weapons)
-        stam = w.stamina_cost if w else 0
-        mana = getattr(w, "mana_cost", 0) if w else 0
+        """v3.10.1: stamina+mana cost of using `selection` ATK.
+
+        Magic (arcana) reads its cost ONLY from the spell — weapon
+        stamina/mana costs are physical-attack concepts and do not
+        apply to spellcasting. Physical attacks (martial / ranged /
+        stealth) read their cost from the weapon only.
+        """
         if selection == "arcana":
             spell = spell_override if spell_override is not None else self._equipped_spell(character)
             if spell is None and character.can_cast_without_staff:
                 if character.selected_spell_id:
                     spell = next((s for s in self.state.spells
                                   if s.id == character.selected_spell_id), None)
-            if spell is not None:
-                stam += getattr(spell, "stamina_cost", 0)
-                mana += spell.mana_cost
-        return stam, mana
+            if spell is None:
+                return 0, 0
+            return (int(getattr(spell, "stamina_cost", 0) or 0),
+                    int(getattr(spell, "mana_cost", 0) or 0))
+        # Physical: weapon costs only.
+        w = weapon_override if weapon_override is not None else character.get_active_weapon(self.state.weapons)
+        if w is None:
+            return 0, 0
+        return (int(getattr(w, "stamina_cost", 0) or 0),
+                int(getattr(w, "mana_cost", 0) or 0))
 
     def _outgoing_damage(self, character: Character, selection: str,
                           weapon_override=None, spell_override=None) -> float:
@@ -1527,6 +1532,27 @@ class StateManager(QObject):
         _apply_weapon_inflictions(right.character, left.character,
                                     enc.right_action, right_dmg)
 
+        # v3.10.1: arcana ATTACK with a destruction spell should also
+        # run the spell's non-damage effects on the target (status
+        # passives, secondary hp/stamina/mana hits). The damage
+        # portion has already landed via damage_from + receive; the
+        # `target == "damage"` rows are skipped inside
+        # _apply_spell_effects so we never double-count.
+        for side, inst, other_inst in (
+            ("left", left, right), ("right", right, left),
+        ):
+            action = enc.left_action if side == "left" else enc.right_action
+            sel = (enc.left_atk_selection if side == "left"
+                    else enc.right_atk_selection)
+            if action != "attack" or sel != "arcana":
+                continue
+            spell = _picked_spell(side, "action_spell_id")
+            if spell is None:
+                continue
+            sub_msgs = self._apply_spell_effects(
+                spell, inst.character, other_inst.character)
+            msgs.extend(sub_msgs)
+
         # --- non-attack actions on each side ---
         for side, inst, action, attacker in (
             ("left", left, enc.left_action, right.character),
@@ -1541,7 +1567,14 @@ class StateManager(QObject):
                 msgs.append(sub_msg)
                 continue
             if action == "cast":
-                spell = self._equipped_spell(inst.character)
+                # v3.10.1: read the spell picked in the conflict panel
+                # (left_cast_spell_id / right_cast_spell_id). Fall back
+                # to the equipped-spell legacy path if nothing's been
+                # picked. The spell's effects are what get applied —
+                # this is the whole point of a non-destruction Cast.
+                spell = _picked_spell(side, "cast_spell_id")
+                if spell is None:
+                    spell = self._equipped_spell(inst.character)
                 if spell is None and inst.character.can_cast_without_staff:
                     if inst.character.selected_spell_id:
                         spell = next((s for s in self.state.spells

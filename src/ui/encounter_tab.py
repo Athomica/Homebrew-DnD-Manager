@@ -52,17 +52,13 @@ from ui.components.passive_editor import PassiveListEditor
 # ---------------------------------------------------------------------------
 
 def _fade_in(widget: QWidget, duration_ms: int = 220) -> None:
-    eff = widget.graphicsEffect()
-    if not isinstance(eff, QGraphicsOpacityEffect):
-        eff = QGraphicsOpacityEffect(widget)
-        widget.setGraphicsEffect(eff)
-    anim = QPropertyAnimation(eff, b"opacity", widget)
-    anim.setDuration(duration_ms)
-    anim.setStartValue(0.0)
-    anim.setEndValue(1.0)
-    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-    widget._fade_anim = anim  # type: ignore[attr-defined]
-    anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+    """v3.10.1: fading animations removed per user spec — they were
+    jarring when the same panel was rebuilt every signal-fire (which
+    happens often: action toggles, character_changed, etc.). This is a
+    no-op kept around so existing call sites don't need to be ripped
+    out, and so we can re-enable the effect easily if it's wanted
+    again."""
+    return
 
 
 # ---------------------------------------------------------------------------

@@ -100,33 +100,11 @@ class CollapsibleSection(QFrame):
             self._on_toggled(not opened)  # callback receives "collapsed" bool
 
     def _apply_open(self, opened: bool, animate: bool) -> None:
+        # v3.10.1: animate flag ignored — snap open/closed. The expand
+        # animation made every section toggle feel laggy when the user
+        # was clicking through several at once. Arrow direction is
+        # still kept in sync for the affordance.
         self._toggle.setArrowType(Qt.ArrowType.DownArrow if opened
                                   else Qt.ArrowType.RightArrow)
-        if animate:
-            self._anim.stop()
-            if opened:
-                self._body.setVisible(True)
-                content_h = max(self._body.sizeHint().height(), 60)
-                self._anim.setStartValue(self._body.maximumHeight())
-                self._anim.setEndValue(content_h + 4)
-                try:
-                    self._anim.finished.disconnect()
-                except TypeError:
-                    pass
-                # After expanding, let the body grow naturally
-                self._anim.finished.connect(
-                    lambda: self._body.setMaximumHeight(16777215))
-            else:
-                start = self._body.height()
-                self._anim.setStartValue(start)
-                self._anim.setEndValue(0)
-                try:
-                    self._anim.finished.disconnect()
-                except TypeError:
-                    pass
-                self._anim.finished.connect(
-                    lambda: self._body.setVisible(False))
-            self._anim.start()
-        else:
-            self._body.setVisible(opened)
-            self._body.setMaximumHeight(16777215 if opened else 0)
+        self._body.setVisible(opened)
+        self._body.setMaximumHeight(16777215 if opened else 0)

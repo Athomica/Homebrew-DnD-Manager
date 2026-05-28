@@ -82,9 +82,8 @@ class VitalBar(QWidget):
         outer.addLayout(title_row)
         outer.addLayout(bar_row)
 
-        self._anim = QPropertyAnimation(self._bar, b"value", self)
-        self._anim.setDuration(280)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # v3.10.1: removed the QPropertyAnimation — bar value snaps
+        # straight to the target now. See _refresh_bar.
 
         self._current_input.valueChanged.connect(self._refresh_bar)
         self._max_input.valueChanged.connect(self._refresh_bar)
@@ -258,13 +257,10 @@ class VitalBar(QWidget):
         # Bar progress fills the EFFECTIVE max — so a buffed character
         # visibly fills past the raw 100 line.
         self._bar.setMaximum(cap_mx)
-        if animate and prev_value is not None and prev_value != cur:
-            self._anim.stop()
-            self._anim.setStartValue(prev_value)
-            self._anim.setEndValue(cur)
-            self._anim.start()
-        else:
-            self._bar.setValue(cur)
+        # v3.10.1: snap directly instead of animating. The 280ms fill
+        # was jarring during rapid refresh cycles (action toggles fire
+        # encounter_changed → refresh → animate every time).
+        self._bar.setValue(cur)
 
         ratio = cur / cap_mx if cap_mx else 0
         if cur <= 0:

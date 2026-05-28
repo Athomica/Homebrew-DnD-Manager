@@ -1,5 +1,45 @@
 # DnD Manager Changelog
 
+## v3.10.1 — Spell-only magic; animations gone
+
+### Arcana / Cast read spell data only
+v3.10's `_action_costs` was adding the weapon's stamina_cost and
+mana_cost to the spell's costs for arcana attacks. That's wrong —
+weapon damage / stamina / mana are physical-attack concepts. Magic
+reads from the spell exclusively:
+
+- **`_action_costs(arcana / cast, ...)`** returns the picked spell's
+  `(stamina_cost, mana_cost)`. If no spell is picked, the cost is
+  `(0, 0)`.
+- **`derive_combat_view`** sets `arcana_dmg_input = 0` when no spell
+  is available, never falls back to weapon damage.
+
+### Cast action runs the picked spell's effects
+The conflict resolver's `action == "cast"` branch now reads the
+spell from `enc.{side}_cast_spell_id` (the conflict-panel picker)
+before falling back to `_equipped_spell`. The spell's non-damage
+effects (`hp` / `stamina` / `mana` / status passives) all apply via
+`_apply_spell_effects`. This is the whole point of casting a
+Restoration / Alteration spell — the effects are what land.
+
+### Arcana attack also runs spell effects
+When attack + arcana is picked, the damage portion lands via the
+normal `damage_from` path. Now the spell's NON-damage effects
+(`target == "damage"` rows are skipped to avoid double-counting)
+also run via `_apply_spell_effects`. So a Firebolt that has
+`damage 15` plus a `burn -3 stamina` effect both lands the 15
+damage AND drains 3 stamina.
+
+### Fading animations removed
+Per spec, jarring during rapid refresh cycles (every action toggle
+fires `encounter_changed` → refresh → animation).
+
+- `_fade_in(...)` is now a no-op (existing call sites stay so we can
+  re-enable the effect easily later).
+- `VitalBar`'s 280 ms progress-bar fill removed — value snaps.
+- `CollapsibleSection`'s expand/collapse height animation removed —
+  sections snap open/closed.
+
 ## v3.10 — Conflict-panel pickers, weapon-per-attack, spell-per-cast
 
 ### Adding a spell refreshes character pickers in real time

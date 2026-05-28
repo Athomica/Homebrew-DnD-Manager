@@ -630,12 +630,11 @@ def derive_combat_view(character: Character,
     martial = martial_atk(weapon_damage, profs["martial"]["throw"],
                           character.effective_sp("martial"),
                           character.form_mult("martial"), character.dice)
-    # v3.2/v3.3: Arcana uses the equipped spell's damage when a staff/wand is
-    # held (or when can_cast_without_staff is True with a spell selected).
-    # Only Destruction-school spells produce attack damage; other schools set
-    # arcana ATK to 0. Damage value comes from the spell's effect list
-    # (target=='damage') in v3.3; legacy `spell.damage` fallback supported.
-    arcana_dmg_input = weapon_damage
+    # v3.2/v3.3/v3.10.1: Arcana damage comes EXCLUSIVELY from the
+    # equipped/picked spell. A weapon's damage value is a physical
+    # stat — it has no place in the magic formula. If no spell is
+    # available, arcana ATK is 0.
+    arcana_dmg_input = 0
     if spell is not None:
         if getattr(spell, "school", "Destruction") == "Destruction":
             arcana_dmg_input = spell_base_damage(spell)
