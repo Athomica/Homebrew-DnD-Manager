@@ -1303,8 +1303,13 @@ class StateManager(QObject):
             effects = [SpellEffect(target="damage", scope="fixed",
                                     amount=float(spell.damage),
                                     duration="single")]
-        recipient = (caster if school in ("Restoration", "Alteration")
-                     else target)
+        # v3.10.3: the `target` parameter is the explicit recipient now
+        # (from the Cast target picker). School only controls the SIGN
+        # — Restoration / Alteration are positive (heal / buff),
+        # Destruction is negative (damage / drain) on the chosen
+        # target. The old auto-route to caster only happened because
+        # the caller never passed a target; now they always do.
+        recipient = target
         for eff in effects:
             amt = me.spell_effect_amount(eff, caster)
             sign = +1 if school in ("Restoration", "Alteration") else -1
@@ -1559,11 +1564,7 @@ class StateManager(QObject):
                 msgs.append(sub_msg)
                 continue
             if action == "cast":
-                # v3.10.1: read the spell picked in the conflict panel
-                # (left_cast_spell_id / right_cast_spell_id). Fall back
-                # to the equipped-spell legacy path if nothing's been
-                # picked. The spell's effects are what get applied —
-                # this is the whole point of a non-destruction Cast.
+                # v3.10.1/3: read the picked spell + target.
                 spell = _picked_spell(side, "cast_spell_id")
                 if spell is None:
                     spell = self._equipped_spell(inst.character)
@@ -1573,8 +1574,28 @@ class StateManager(QObject):
                                       if s.id == inst.character.selected_spell_id),
                                      None)
                 if spell is not None:
-                    other = right.character if side == "left" else left.character
-                    sub_msgs = self._apply_spell_effects(spell, inst.character, other)
+                    # v3.10.3: target chosen in the Cast pane. Sentinel
+                    # "self" means the caster; an instance_id means a
+                    # specific character (can be in ANY encounter, per
+                    # the user's cross-encounter targeting spec); None
+                    # falls back to the opponent in this conflict.
+                    target_id = getattr(enc, f"{side}_cast_target_id", None)
+                    target_char = None
+                    if target_id == "self":
+                        target_char = inst.character
+                    elif target_id:
+                        for e in self.state.encounters:
+                            for ti in e.instances:
+                                if ti.instance_id == target_id:
+                                    target_char = ti.character
+                                    break
+                            if target_char is not None:
+                                break
+                    if target_char is None:
+                        target_char = (right.character if side == "left"
+                                        else left.character)
+                    sub_msgs = self._apply_spell_effects(
+                        spell, inst.character, target_char)
                     msgs.extend(sub_msgs)
             elif action == "use_item":
                 pid = (enc.left_pending_item_id if side == "left"
@@ -1635,6 +1656,16 @@ class StateManager(QObject):
         enc.right_pending_item_id = None
         enc.left_pending_form_id = None
         enc.right_pending_form_id = None
+        # v3.10.3: also reset the conflict-panel pickers so re-entering
+        # a conflict starts from a clean state ("Choose…" placeholder).
+        enc.left_action_weapon_id = None
+        enc.right_action_weapon_id = None
+        enc.left_action_spell_id = None
+        enc.right_action_spell_id = None
+        enc.left_cast_spell_id = None
+        enc.right_cast_spell_id = None
+        enc.left_cast_target_id = None
+        enc.right_cast_target_id = None
         msg = "Conflict resolved. " + " ".join(msgs) if msgs else "Conflict resolved."
         self.log_event("conflict_resolved", msg, category="combat")
         self.encounter_changed.emit()

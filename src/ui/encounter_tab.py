@@ -1523,15 +1523,17 @@ class ConflictPanel(QGroupBox):
         sub_stack.addWidget(shift_pane)  # index 3
 
         # ── Pane 4: Cast ───────────────────────────────────────────
-        # Searchable non-destruction spell picker. The combobox is
-        # editable so typing filters the dropdown by substring.
+        # v3.10.3: spell picker + target picker stacked vertically.
+        # The spell combo is searchable. The target combo lists every
+        # character in any active encounter (cross-encounter support).
         cast_pane = QFrame()
-        cast_l = QHBoxLayout(cast_pane); cast_l.setContentsMargins(8, 4, 8, 4)
-        cast_l.addWidget(QLabel("Cast:"))
+        cast_l = QVBoxLayout(cast_pane); cast_l.setContentsMargins(8, 4, 8, 4)
+        cast_l.setSpacing(4)
+        spell_row = QHBoxLayout(); spell_row.setSpacing(6)
+        spell_row.addWidget(QLabel("Cast:"))
         cast_combo = NoWheelComboBox()
         cast_combo.setEditable(True)
         cast_combo.setInsertPolicy(NoWheelComboBox.InsertPolicy.NoInsert)
-        # QCompleter on the line edit gives type-to-filter behavior.
         from PyQt6.QtWidgets import QCompleter
         cast_completer = QCompleter(cast_combo.model(), cast_combo)
         cast_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -1539,7 +1541,15 @@ class ConflictPanel(QGroupBox):
         cast_combo.setCompleter(cast_completer)
         cast_combo.currentIndexChanged.connect(
             self._on_cast_spell_picked_factory(side, cast_combo))
-        cast_l.addWidget(cast_combo, 1)
+        spell_row.addWidget(cast_combo, 1)
+        cast_l.addLayout(spell_row)
+        target_row = QHBoxLayout(); target_row.setSpacing(6)
+        target_row.addWidget(QLabel("Target:"))
+        cast_target_combo = NoWheelComboBox()
+        cast_target_combo.currentIndexChanged.connect(
+            self._on_cast_target_picked_factory(side, cast_target_combo))
+        target_row.addWidget(cast_target_combo, 1)
+        cast_l.addLayout(target_row)
         sub_stack.addWidget(cast_pane)  # index 4
         layout.addWidget(sub_stack)
 
@@ -1563,6 +1573,7 @@ class ConflictPanel(QGroupBox):
             "atk_tool_combo": atk_tool_combo,
             "atk_tool_lbl": atk_tool_lbl,
             "cast_combo": cast_combo,
+            "cast_target_combo": cast_target_combo,
             "outcome": outcome,
         }
 
@@ -1581,6 +1592,9 @@ class ConflictPanel(QGroupBox):
         combo = col["atk_tool_combo"]
         combo.blockSignals(True)
         combo.clear()
+        # v3.10.3: placeholder first; data=None — committing this picks
+        # nothing, the resolve fallback applies.
+        combo.addItem("Choose…", None)
         weapons_by_id = {w.id: w for w in self._state.state.weapons}
         if sel == "arcana":
             col["atk_tool_lbl"].setText("Spell:")
@@ -1596,7 +1610,6 @@ class ConflictPanel(QGroupBox):
             pick = getattr(enc, f"{side}_action_spell_id", None) if enc else None
         else:
             col["atk_tool_lbl"].setText("Using:")
-            # Tag every equipped weapon by slot for clarity.
             for slot_attr, slot_label in (
                 ("primary_weapon_id", "Primary"),
                 ("secondary_weapon_id", "Secondary"),
@@ -1611,7 +1624,7 @@ class ConflictPanel(QGroupBox):
                 combo.addItem(f"{slot_label}: {w.name}", w.id)
             enc = self._state.state.active_encounter
             pick = getattr(enc, f"{side}_action_weapon_id", None) if enc else None
-        # Restore the saved pick, or default to the first option.
+        # Restore the saved pick (placeholder otherwise).
         if pick is not None:
             for i in range(combo.count()):
                 if combo.itemData(i) == pick:
@@ -1620,11 +1633,14 @@ class ConflictPanel(QGroupBox):
         combo.blockSignals(False)
 
     def _refresh_cast_combo(self, side: str, col: dict, character) -> None:
-        """v3.10: non-destruction spells the character knows. Searchable
-        via the editable QComboBox + QCompleter."""
+        """v3.10/3.10.3: non-destruction spells the character knows.
+        Searchable via the editable QComboBox + QCompleter. First
+        entry is the "Choose…" placeholder so nothing is auto-picked.
+        """
         combo = col["cast_combo"]
         combo.blockSignals(True)
         combo.clear()
+        combo.addItem("Choose…", None)
         for s in self._state.state.spells:
             if getattr(s, "school", "Destruction") == "Destruction":
                 continue
@@ -1636,6 +1652,50 @@ class ConflictPanel(QGroupBox):
             combo.addItem(f"{tag} {s.name}  ({s.school})", s.id)
         enc = self._state.state.active_encounter
         pick = getattr(enc, f"{side}_cast_spell_id", None) if enc else None
+        if pick is not None:
+            for i in range(combo.count()):
+                if combo.itemData(i) == pick:
+                    combo.setCurrentIndex(i)
+                    break
+        combo.blockSignals(False)
+
+    def _refresh_cast_target_combo(self, side: str, col: dict) -> None:
+        """v3.10.3: list every character currently in ANY active
+        encounter as a target option, plus 'Self'. Cross-encounter
+        targeting is intentional — a caster in Encounter A can
+        target someone in Encounter B (per the user spec).
+        """
+        combo = col["cast_target_combo"]
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Choose…", None)
+        combo.addItem("⊙ Self", "self")
+        # Walk every active encounter so the picker is global.
+        for enc in self._state.state.encounters:
+            for inst in enc.instances:
+                if inst.is_in_bin:
+                    continue
+                # Only include instances actually on a side or in a
+                # deceased pile — orphans aren't reachable targets.
+                if inst.instance_id not in (
+                    enc.left_participant_ids + enc.right_participant_ids
+                    + enc.left_deceased_ids + enc.right_deceased_ids
+                ):
+                    continue
+                # Indicate side membership in the label.
+                if inst.instance_id in enc.left_participant_ids:
+                    side_tag = "L"
+                elif inst.instance_id in enc.right_participant_ids:
+                    side_tag = "R"
+                elif inst.instance_id in (enc.left_deceased_ids
+                                            + enc.right_deceased_ids):
+                    side_tag = "💀"
+                else:
+                    side_tag = "?"
+                label = f"[{enc.name} · {side_tag}] {inst.character.name}"
+                combo.addItem(label, inst.instance_id)
+        enc = self._state.state.active_encounter
+        pick = getattr(enc, f"{side}_cast_target_id", None) if enc else None
         if pick is not None:
             for i in range(combo.count()):
                 if combo.itemData(i) == pick:
@@ -1665,6 +1725,15 @@ class ConflictPanel(QGroupBox):
             if enc is None:
                 return
             setattr(enc, f"{side}_cast_spell_id", combo.currentData())
+            self._state.encounter_changed.emit()
+        return handler
+
+    def _on_cast_target_picked_factory(self, side: str, combo: NoWheelComboBox):
+        def handler(_i: int) -> None:
+            enc = self._state.state.active_encounter
+            if enc is None:
+                return
+            setattr(enc, f"{side}_cast_target_id", combo.currentData())
             self._state.encounter_changed.emit()
         return handler
 
@@ -1768,6 +1837,7 @@ class ConflictPanel(QGroupBox):
             # v3.10: populate the Attack pane's weapon/spell dropdown
             # based on the currently-checked atk-type radio.
             self._refresh_attack_tool_combo(side, col, inst.character)
+            self._refresh_cast_target_combo(side, col)
             # v3.10: populate the Cast pane's non-destruction spell
             # picker from the character's known spells.
             self._refresh_cast_combo(side, col, inst.character)
@@ -1784,7 +1854,9 @@ class ConflictPanel(QGroupBox):
                        else enc.right_pending_form_id)
             form_combo.blockSignals(True)
             form_combo.clear()
-            form_combo.addItem("(none)", None)
+            # v3.10.3: placeholder so the picker starts empty rather than
+            # auto-selecting the first form.
+            form_combo.addItem("Choose…", None)
             for f in inst.character.forms:
                 form_combo.addItem(f.name, f.id)
             if pending:
@@ -2370,10 +2442,33 @@ class EncounterTab(QWidget):
         dlg.exec()
 
     def _on_toggle_conflict(self) -> None:
+        # v3.10.3: defensive try/except around resolve. A silent
+        # exception inside resolve_conflict would leave
+        # enc.in_conflict_mode = True and the user "stuck in conflict"
+        # — exactly the symptom the user reported when picking arcana
+        # attack. Also surface the outcome via the main window's
+        # status bar instead of a modal QMessageBox so the flow isn't
+        # interrupted.
         enc = self._state.state.active_encounter
         if enc and enc.in_conflict_mode:
-            msg = self._state.resolve_conflict()
-            QMessageBox.information(self, "Conflict resolved", msg)
+            try:
+                msg = self._state.resolve_conflict()
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                QMessageBox.critical(
+                    self, "Resolve failed",
+                    f"{type(exc).__name__}: {exc}")
+                # Force-exit conflict regardless, so the user isn't
+                # locked in. The picker fields stay populated so the
+                # GM can retry.
+                if self._state.state.active_encounter is not None:
+                    self._state.state.active_encounter.in_conflict_mode = False
+                    self._state.encounter_changed.emit()
+                return
+            mw = self.window()
+            if mw is not None and hasattr(mw, "statusBar"):
+                mw.statusBar().showMessage(msg, 5000)
             return
         ok, msg = self._state.toggle_conflict_mode()
         if not ok:

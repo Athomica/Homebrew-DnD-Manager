@@ -1522,23 +1522,15 @@ class CharacterSheet(QWidget):
 
             # Passive list editor (Permanent + Inflicted, character-owned)
             self._passive_editor.load(self._char.passives)
-            # v3.9 (C6): populate Equipment-derived + From Items lists.
-            sources = me.passive_sources(
-                self._char, self._state.state.weapons,
-                self._state.state.armors, self._state.state.spells,
-                self._state.state.items)
-            self._eq_passive_list.clear()
-            for src_obj, p in sources["equipment"]:
-                unit = "%" if p.scope == "percent" else ""
-                self._eq_passive_list.addItem(
-                    f"{src_obj.name}: {p.name} ({p.amount:+.1f}{unit} on "
-                    f"{p.affected_value or '?'}, {p.duration})")
-            self._item_passive_list.clear()
-            for src_obj, p in sources["items"]:
-                unit = "%" if p.scope == "percent" else ""
-                self._item_passive_list.addItem(
-                    f"{src_obj.name}: {p.name} ({p.amount:+.1f}{unit} on "
-                    f"{p.affected_value or '?'}, {p.duration})")
+            # v3.9 / v3.10.3: Equipment-derived + From-Items lists now
+            # populate from _refresh_derived too — they were ONLY
+            # refreshed in _refresh_inputs, which doesn't run on most
+            # character_changed signals. Equipment swaps would update
+            # the vital bars (because those go through
+            # _push_effective_vitals in _refresh_derived) but the
+            # Equipment-derived passive list stayed stale until a full
+            # external reload.
+            self._refresh_passive_source_lists()
 
             # Encounter history
             if hasattr(self, "_encounter_history_list"):
@@ -1570,6 +1562,30 @@ class CharacterSheet(QWidget):
             return
         # ensureWidgetVisible scrolls so `sect` is in view with a margin.
         scroll.ensureWidgetVisible(sect, 0, 60)
+
+    def _refresh_passive_source_lists(self) -> None:
+        """v3.10.3: populate the two read-only passive lists from the
+        equipment + items the character currently has. Called from
+        _refresh_inputs AND _refresh_derived so equipment swaps are
+        visible in real time."""
+        if not hasattr(self, "_eq_passive_list"):
+            return
+        sources = me.passive_sources(
+            self._char, self._state.state.weapons,
+            self._state.state.armors, self._state.state.spells,
+            self._state.state.items)
+        self._eq_passive_list.clear()
+        for src_obj, p in sources["equipment"]:
+            unit = "%" if p.scope == "percent" else ""
+            self._eq_passive_list.addItem(
+                f"{src_obj.name}: {p.name} ({p.amount:+.1f}{unit} on "
+                f"{p.affected_value or '?'}, {p.duration})")
+        self._item_passive_list.clear()
+        for src_obj, p in sources["items"]:
+            unit = "%" if p.scope == "percent" else ""
+            self._item_passive_list.addItem(
+                f"{src_obj.name}: {p.name} ({p.amount:+.1f}{unit} on "
+                f"{p.affected_value or '?'}, {p.duration})")
 
     def _push_effective_vitals(self) -> None:
         """v3.9.1: push effective_vitals into each VitalBar. Updates the
@@ -1622,6 +1638,10 @@ class CharacterSheet(QWidget):
         # update green/red labels in real time. Doesn't touch the
         # cur/max spinbox VALUES, only the cap on current.
         self._push_effective_vitals()
+        # v3.10.3: equipment-derived + item-derived passive lists.
+        # Previously these only updated on _refresh_inputs which
+        # doesn't fire on most character_changed signals.
+        self._refresh_passive_source_lists()
         # Level / total SP
         total_sp = self._char.total_sp()
         lvl = me.level(total_sp)

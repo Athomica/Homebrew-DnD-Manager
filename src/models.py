@@ -538,6 +538,13 @@ class Encounter:
     right_action_spell_id: Optional[str] = None
     left_cast_spell_id: Optional[str] = None
     right_cast_spell_id: Optional[str] = None
+    # v3.10.3: a Cast can target any character currently in ANY active
+    # encounter. Stored as either the target's EncounterInstance id, or
+    # the sentinel "self" to mean the caster. None = nothing picked
+    # (the placeholder "Choose…" is selected) — resolve falls back to
+    # the opponent in the current encounter.
+    left_cast_target_id: Optional[str] = None
+    right_cast_target_id: Optional[str] = None
 
     # v3.7: per-encounter attack log. Each time a participant lands actual
     # damage on another participant during conflict resolution, the

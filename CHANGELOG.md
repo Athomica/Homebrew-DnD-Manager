@@ -1,5 +1,53 @@
 # DnD Manager Changelog
 
+## v3.10.3 — Equipment passives realtime; Cast target picker; placeholder dropdowns; exit-conflict fix
+
+### Equipment-derived passive list updates in real time
+The "Equipment-derived" and "From Items" lists on the global Character
+Sheet's Passives section were only rebuilt in `_refresh_inputs`, which
+doesn't run on most `character_changed` signals. Equipment swaps
+updated the effective vitals (via `_push_effective_vitals` in
+`_refresh_derived`) but the two passive-source lists stayed stale.
+v3.10.3 extracts the population to `_refresh_passive_source_lists()`
+and calls it from BOTH `_refresh_inputs` and `_refresh_derived`.
+
+### Cast: target picker (cross-encounter)
+The Cast pane in the conflict panel now has a "Target" dropdown
+underneath the spell picker. Targets:
+
+- **⊙ Self** — caster.
+- **Every character currently in any active encounter** — labelled
+  `[Encounter Name · L/R/💀] Character Name`. Cross-encounter
+  targeting is intentional per the user spec; a caster in
+  Encounter A can heal someone in Encounter B.
+
+`Encounter.left_cast_target_id` / `right_cast_target_id` carry the
+pick. `resolve_conflict`'s Cast block looks up the chosen target's
+character and feeds it to `_apply_spell_effects`. The school of the
+spell only controls the SIGN of the effect now — the target is
+explicit, no auto-routing to caster for Restoration / Alteration.
+
+### Placeholder "Choose…" on every conflict picker
+Every conflict-panel dropdown (attack tool, cast spell, cast target,
+shift form) now opens with a non-selectable `Choose…` entry as
+index 0. Picker handlers treat `None` data as "no pick" — the resolve
+falls back to sensible defaults if the user commits without choosing.
+No more auto-selecting the first item the moment the action changes.
+
+### Exit-conflict no longer "stuck" on arcana attack
+- `_on_toggle_conflict` now wraps `resolve_conflict` in a
+  `try / except`. A silent exception used to leave
+  `enc.in_conflict_mode = True`; if anything raises now it gets
+  printed AND we force `in_conflict_mode = False` so the GM can
+  retry without being trapped.
+- `resolve_conflict` resets ALL the conflict-panel picker fields
+  (`*_action_weapon_id`, `*_action_spell_id`, `*_cast_spell_id`,
+  `*_cast_target_id`) so re-entering a conflict starts from the
+  `Choose…` placeholders.
+- Resolution result is now flashed in the main-window status bar
+  instead of a modal `QMessageBox`, so closing it can't be conflated
+  with a re-entry click.
+
 ## v3.10.2 — Equipment dedupe; template orphan fix; encounter spell mgr; live outcome row
 
 ### Equipment passives apply once per item
