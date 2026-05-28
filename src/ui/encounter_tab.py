@@ -768,21 +768,64 @@ class CompactCharacterCard(QFrame):
 
     # -- tab: Passives ---------------------------------------------
     def _build_passives_tab(self) -> None:
+        """v3.10.6: the in-encounter passive view is split into:
+          - 'Own passives' — character-owned, EDITABLE. The GM can
+            create new ones here with any duration (Single use, For
+            N turns, Permanent…).
+          - 'Inflicted (auto-applied)' — read-only display of any
+            passive on the character whose source starts with
+            `weapon:` / `armor:` / `item:`. These are placed by the
+            damage / equip system and shouldn't be hand-edited from
+            inside the encounter (their countdown ticks on every
+            change_turn(+1) and they're removed when expired).
+        """
+        from PyQt6.QtWidgets import QListWidget as _QLW
         tab = QWidget()
         v = QVBoxLayout(tab)
         v.setContentsMargins(6, 8, 6, 6); v.setSpacing(6)
-        info = QLabel(
-            "Add status effects inflicted during this encounter. "
-            "Permanent passives can't be edited here.")
-        info.setProperty("role", "dim")
-        info.setWordWrap(True)
-        v.addWidget(info)
+
+        own_hdr = QLabel("Own passives — create, edit, remove")
+        own_hdr.setStyleSheet(
+            "background:#2a3445; color:#aacfff; padding:4px 8px; "
+            "border-radius:4px; font-weight:bold;")
+        v.addWidget(own_hdr)
         self._passive_editor = PassiveListEditor(source_default="encounter")
         v.addWidget(self._passive_editor, 1)
         self._passive_editor.changed.connect(
-            lambda: self._state.character_changed.emit(
-                self._instance.character.id))
+            self._on_own_passives_changed)
+
+        infl_hdr = QLabel(
+            "Inflicted / equipment-derived — auto-applied, read-only")
+        infl_hdr.setStyleSheet(
+            "background:#3d2a2a; color:#ffb0a0; padding:4px 8px; "
+            "border-radius:4px; font-weight:bold;")
+        v.addWidget(infl_hdr)
+        self._inflicted_list = _QLW()
+        self._inflicted_list.setMaximumHeight(140)
+        v.addWidget(self._inflicted_list)
         return tab
+
+    def _on_own_passives_changed(self) -> None:
+        """v3.10.6: the editor's working list is a SLICE of the full
+        character.passives list (only the editable entries). When it
+        changes we have to splice the slice back into
+        character.passives so inflicted entries aren't lost AND so
+        the snapshot/tick system sees the new additions."""
+        char = self._instance.character
+        # Inflicted = anything with a source like "weapon:" / "armor:"
+        # / "item:" (or "spell:" / "form:" in future). Everything else
+        # is character-owned and lives in the editor's slice.
+        inflicted = [p for p in char.passives
+                      if self._is_inflicted(p)]
+        # The editor mutated self._own_passives in place. Combine:
+        char.passives = list(getattr(self, "_own_passives", [])) + inflicted
+        self._state.character_changed.emit(char.id)
+
+    @staticmethod
+    def _is_inflicted(p) -> bool:
+        src = (getattr(p, "source", "") or "").lower()
+        return (src.startswith("weapon:") or src.startswith("armor:")
+                or src.startswith("item:") or src.startswith("spell:"))
 
     # -- tab: Forms --------------------------------------------------
     def _build_forms_tab(self) -> None:
@@ -1071,16 +1114,24 @@ class CompactCharacterCard(QFrame):
         return max(1, len(enc.right_participant_ids) + len(enc.right_deceased_ids))
 
     def _refresh_passives(self) -> None:
+        """v3.10.6: feed the editor a fresh slice of the character's
+        OWN passives (those NOT inflicted by equipment), and surface
+        the inflicted/equipment-derived ones in a read-only list
+        below. Both refresh on every signal so the countdown
+        (`Nt left`) updates after a `change_turn(+1)`."""
         c = self._instance.character
-        # Only non-permanent passives are editable here.
-        editable = [p for p in c.passives if p.duration != "permanent"]
-        # Replace the list editor's working list with this subset; the editor
-        # mutates it in place.
-        if not hasattr(self, "_pas_working"):
-            self._pas_working = editable
-        self._passive_editor.load(c.passives)
-        # Sync back: any permanent passives in c.passives stay untouched
-        # because the editor only mutates the slice it received.
+        own = [p for p in c.passives if not self._is_inflicted(p)]
+        inflicted = [p for p in c.passives if self._is_inflicted(p)]
+        # Stash the editor's working slice for the change handler.
+        self._own_passives = own
+        self._passive_editor.load(self._own_passives)
+        # Populate the read-only inflicted list.
+        if not hasattr(self, "_inflicted_list"):
+            return
+        from ui.components.passive_editor import _passive_label
+        self._inflicted_list.clear()
+        for p in inflicted:
+            self._inflicted_list.addItem(_passive_label(p))
 
     def _refresh_forms(self) -> None:
         if not hasattr(self, "_form_combo"):

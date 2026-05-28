@@ -1186,9 +1186,15 @@ class StateManager(QObject):
         char = inst.character
         if delta > 0:
             for _ in range(int(delta)):
-                # 1. Snapshot current passive state BEFORE ticking.
-                inst.turn_snapshots[int(inst.turn)] = _copy.deepcopy(
-                    char.passives)
+                # 1. Snapshot the character state BEFORE ticking — both
+                # the passive list AND the three current-vital values
+                # (so DoT-applied health loss is reverted on rewind).
+                inst.turn_snapshots[int(inst.turn)] = {
+                    "passives": _copy.deepcopy(char.passives),
+                    "health_current": int(char.health_current),
+                    "stamina_current": int(char.stamina_current),
+                    "mana_current": int(char.mana_current),
+                }
                 # 2. Tick non-permanent passives and drop expired.
                 kept: list = []
                 for p in char.passives:
@@ -1224,7 +1230,20 @@ class StateManager(QObject):
                 new_turn = max(0, inst.turn - 1)
                 snap = inst.turn_snapshots.pop(new_turn, None)
                 if snap is not None:
-                    char.passives = _copy.deepcopy(snap)
+                    # v3.10.6: restore the whole snapshotted character
+                    # state — passives AND vitals. Legacy snapshots
+                    # (list, not dict) still restore just the passive
+                    # list for backward compatibility.
+                    if isinstance(snap, dict):
+                        char.passives = _copy.deepcopy(snap.get("passives", []))
+                        if "health_current" in snap:
+                            char.health_current = int(snap["health_current"])
+                        if "stamina_current" in snap:
+                            char.stamina_current = int(snap["stamina_current"])
+                        if "mana_current" in snap:
+                            char.mana_current = int(snap["mana_current"])
+                    else:
+                        char.passives = _copy.deepcopy(snap)
                 inst.turn = new_turn
                 self.state.total_turns = max(0, self.state.total_turns - 1)
         self.log_event("turn_advance",

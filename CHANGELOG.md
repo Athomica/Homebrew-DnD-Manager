@@ -1,5 +1,61 @@
 # DnD Manager Changelog
 
+## v3.10.6 — Visible turn countdown + split passive view + vital rewind
+
+### `Nt left` is visible in every passive label
+The countdown was working in state — `turns_remaining` ticked down on
+each `change_turn(+1)` — but no UI rendered it. The duration display
+("turns:3") never changed, so the user reasonably assumed it was
+broken. `_passive_label(p)` is now the single source of truth for the
+list-row format and it includes `(Nt left)` / `(permanent)` /
+`(expired)`. Used by every QListWidget that shows passives:
+
+- `PassiveListEditor` (own list rows + selected-row label after
+  apply).
+- The compact card's read-only "Inflicted" list.
+- (The Character Sheet's Equipment-derived / Item-derived blocks
+  already pulled from a different format; left for now.)
+
+### Step-back also restores vitals
+v3.10.4 snapshotted only `character.passives`. Stepping back from
+turn 2 → 1 restored the passive list (Bleed countdown went 3 → 4)
+but left `health_current` at the post-DoT value. Now the snapshot is
+a dict carrying `passives` + the three `*_current` vital values; the
+rewind path restores all four. Legacy list-shaped snapshots still
+load. Verified:
+
+```
+T0  hp=200  bleed_t=4
+T1  hp=195  bleed_t=3   (DoT ticked)
+T2  hp=190  bleed_t=2
+←T1  hp=195  bleed_t=3   (full rewind)
+←T0  hp=200  bleed_t=4
+```
+
+### In-encounter passive view: editable vs read-only split
+The compact card's Passives tab is now two stacked sections:
+
+- **Own passives — create, edit, remove** (blue header). A
+  `PassiveListEditor` bound to a slice of `character.passives`
+  containing everything the GM owns (anything whose `source`
+  does NOT start with `weapon:` / `armor:` / `item:` / `spell:`).
+  All durations are still available — Single use, For N turns,
+  Permanent.
+- **Inflicted / equipment-derived — auto-applied, read-only** (red
+  header). A `QListWidget` showing the same `(Nt left)` countdown
+  format. Edits aren't possible from inside the encounter; the
+  weapon / armor / item that placed the passive is the source of
+  truth, and the countdown ticks automatically on
+  `change_turn(+1)`.
+
+`_on_own_passives_changed` splices the editor's slice back into
+`character.passives` and re-appends the inflicted entries so the
+snapshot/tick system sees a single coherent list.
+
+### Test updated
+`test_turn_advance_ticks_passives_and_snapshots` now checks the
+dict-shaped snapshot (`snap["passives"]`, `snap["health_current"]`).
+
 ## v3.10.5 — Hydrate passive lists on load
 
 Two crash modes reported, both same root cause: passive lists nested

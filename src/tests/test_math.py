@@ -402,7 +402,10 @@ class TestEncounterSystem(unittest.TestCase):
         self.assertEqual(inst.character.passives[0].turns_remaining, 3)
         # Snapshot of turn 0 should hold the original passive intact.
         self.assertIn(0, inst.turn_snapshots)
-        self.assertEqual(inst.turn_snapshots[0][0].turns_remaining, 4)
+        snap = inst.turn_snapshots[0]
+        # v3.10.6: snapshot stores passives + vitals as a dict.
+        self.assertEqual(snap["passives"][0].turns_remaining, 4)
+        self.assertEqual(snap["health_current"], start_hp)
         # Step back → restore turn 0 state.
         ok, _ = self.sm.change_turn(inst.instance_id, -1)
         self.assertTrue(ok)

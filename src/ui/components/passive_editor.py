@@ -22,7 +22,27 @@ _DURATION_OPTIONS = (
 )
 
 
-# v3.10.4: duration_to_turns_remaining lives in models.py — see import above.
+def _passive_label(p) -> str:
+    """v3.10.6: single source of truth for the list-row label.
+    Includes turns_remaining as `(Nt left)` for non-permanent
+    passives so the user can watch the countdown decrement on every
+    `change_turn(+1)` click."""
+    unit = "%" if getattr(p, "scope", "fixed") == "percent" else ""
+    tag = "✓" if getattr(p, "active", True) else "·"
+    tr = int(getattr(p, "turns_remaining", -1) or -1)
+    if tr < 0:
+        dur_str = "permanent"
+    elif tr == 0:
+        dur_str = "expired"
+    else:
+        dur_str = f"{tr}t left"
+    return (f"{tag} {getattr(p, 'name', '?')} "
+            f"({getattr(p, 'amount', 0):+.2f}{unit} on "
+            f"{getattr(p, 'affected_value', '') or '?'}, "
+            f"{dur_str}, src={getattr(p, 'source', '?')})")
+
+
+# v3.10.4: helper moved to models.duration_to_turns_remaining — see import above.
 
 
 def build_affected_combo() -> NoWheelComboBox:
@@ -176,11 +196,7 @@ class PassiveListEditor(QWidget):
         # without re-selecting.
         item = self._list.item(row)
         if item is not None:
-            unit = "%" if p.scope == "percent" else ""
-            tag = "✓" if p.active else "·"
-            item.setText(
-                f"{tag} {p.name} ({p.amount:+.2f}{unit} on "
-                f"{p.affected_value or '?'}, {p.duration}, src={p.source})")
+            item.setText(_passive_label(p))
         self.changed.emit()
 
     def load(self, passives: list[Passive]) -> None:
@@ -249,12 +265,7 @@ class PassiveListEditor(QWidget):
     def _refresh_list(self) -> None:
         self._list.clear()
         for p in self._passives:
-            tag = "[on]" if p.active else "[off]"
-            scope = getattr(p, "scope", "fixed")
-            unit = "%" if scope == "percent" else ""
-            txt = (f"{tag} {p.name} ({p.amount:+.2f}{unit} on "
-                   f"{p.affected_value or '?'}, {p.duration}, src={p.source})")
-            item = QListWidgetItem(txt)
+            item = QListWidgetItem(_passive_label(p))
             self._list.addItem(item)
 
     def _select_affected(self, value: str) -> None:
