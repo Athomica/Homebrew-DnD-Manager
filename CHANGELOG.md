@@ -1,5 +1,56 @@
 # DnD Manager Changelog
 
+## v3.9.8 — Player View window
+
+A read-only mirror of the active encounter the GM can open and show
+to players. Subscribes to state changes; the players see exactly what
+the GM does, in real time.
+
+### How to open
+- New `👁 Player View` button next to `+ New encounter` on the
+  encounter tab strip. Clicking opens the window (or focuses an
+  existing one — no duplicates). Drag it to a second monitor; share
+  it; project it.
+
+### What the players see
+- Vital bars (Health / Stamina / Mana) with effective max from
+  passives + form mults.
+- The action each side picked during a conflict, shown as the same
+  colored chip (`⚔ Attack`, `🛡 Block`, etc.) used in the main UI.
+- The currently active form (badge + non-neutral multipliers).
+- Passives currently on each character.
+- Whether a conflict is in progress.
+
+### What the players DON'T see
+- Combat-numbers strip (MAR / RNG / ARC / STH / DEF / DOD / Health↓
+  / Health↓sh) — GM-internal math.
+- Fall damage row.
+- Conflict-panel outcome row (Dealt / Recv / -SP / -MP / -HP).
+- Conflict-panel sub-controls (ATK type / use-shield / form picker).
+- Battle Statistics (KP / SP).
+- Gear / Inventory tabs.
+- Any editable widget — every QSpinBox, QLineEdit, QComboBox,
+  QCheckBox, QPushButton, QSlider, QListWidget is disabled.
+
+### Implementation
+- `CompactCharacterCard` and `ConflictPanel` each gain a
+  `viewer_mode=False` parameter. When True, they skip the hidden
+  sections during construction AND lock every input via
+  `_apply_viewer_lock()`.
+- `ui/player_view.py` houses the new `PlayerViewWindow`. It owns no
+  state — it reads the same `StateManager` the main window uses and
+  rebuilds on `encounter_changed` / `character_changed` /
+  `lists_changed`. Disconnects cleanly on close.
+- The window is non-modal (the GM can keep interacting with the main
+  window) and gets its own top-level frame (parent=None) so it can
+  be moved to a second monitor independently.
+
+### Tiny fix carried along
+- v3.9.7 introduced an `UnboundLocalError` when the active side wasn't
+  shifting — `side_data_extra_health_cost` wasn't initialized in the
+  attack / cast / block / dodge branches. Initialized alongside
+  `stam_cost = mana_cost = 0` now.
+
 ## v3.9.7 — Per-form shift cost + forms UX overhaul
 
 ### Health potion: another layer of defense

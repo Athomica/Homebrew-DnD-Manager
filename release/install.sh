@@ -23,7 +23,7 @@ BASE="https://raw.githubusercontent.com/$REPO/$BRANCH/release"
 # Expected SHA-256 of the assembled binary. Updated every time the binary is
 # rebuilt; if the parts on disk don't match, the installer aborts loudly
 # instead of silently installing a stale build.
-EXPECTED_SHA256="1ecec1b3a4c9073617f42635f97c073ea8b2011590449e1efd8f95c848f5223a"
+EXPECTED_SHA256="d51b8fa9fdf8f2ffd370fde40251bb608842dd6a9df6f81254f9a795ac9c759b"
 
 DEST="$HOME/DnDManager"
 TMP1="$(mktemp -t dndmgr.part1.XXXXXX)"

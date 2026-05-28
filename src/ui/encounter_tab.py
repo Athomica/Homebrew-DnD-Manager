@@ -89,6 +89,7 @@ class CompactCharacterCard(QFrame):
     def __init__(self, state: StateManager, instance: EncounterInstance,
                  side: str, current_idx: int, total: int,
                  in_conflict: bool = False,
+                 viewer_mode: bool = False,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._state = state
@@ -98,6 +99,12 @@ class CompactCharacterCard(QFrame):
         # being resolved — KP/SP accumulators only matter between
         # conflicts. Pass-through to the tab assembler below.
         self._in_conflict = in_conflict
+        # v3.9.8: viewer mode is a read-only mirror used by the
+        # PlayerViewWindow. Hides combat-numbers strip, fall damage,
+        # use-item button, and gear/inventory tabs entirely; disables
+        # every input. The player sees vital bars + name + active
+        # form, nothing they can mistake for the GM's controls.
+        self._viewer_mode = viewer_mode
         # v3.9 (B5): focusable so Left/Right arrow keys cycle.
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setObjectName("EncounterCardRoot")
@@ -193,12 +200,14 @@ class CompactCharacterCard(QFrame):
         # During a conflict the Gear tab is hidden entirely — the only
         # useful gear control mid-fight is primary/secondary swap, and
         # that's grafted onto the Status (combat) tab below.
-        equipment = None if self._in_conflict else self._build_equipment_tab()
-        inventory = None if self._in_conflict else self._build_inventory_tab()
-        # v3.7: Stats section (battle statistics — KP/solo_kp/SP earned)
-        # is suppressed during conflict mode. It's not actionable while
-        # actions are being picked, just visual noise.
-        stats = None if self._in_conflict else self._build_stats_tab()
+        # v3.9.8: viewer mode hides Gear entirely (players don't need to
+        # see the GM's inventory), and Battle Stats too (KP totals are
+        # GM-internal). Passives + Forms still show because players
+        # care which statuses are on them.
+        skip_gear = self._in_conflict or self._viewer_mode
+        equipment = None if skip_gear else self._build_equipment_tab()
+        inventory = None if skip_gear else self._build_inventory_tab()
+        stats = None if (self._in_conflict or self._viewer_mode) else self._build_stats_tab()
         passives = self._build_passives_tab()
         forms = (self._build_forms_tab()
                   if (instance.character.is_shapeshifter
@@ -212,13 +221,8 @@ class CompactCharacterCard(QFrame):
             sheet_sections.append(("🐺  Forms", forms))
         sheet = self._make_grouped_tab(sheet_sections)
 
-        # v3.9.4: tabs are always Status / Gear / Passives in the
-        # encounter view (the old Now / Sheet labels are gone). During
-        # a conflict, Gear is hidden because the only mid-fight
-        # actionable gear is primary/secondary swap — that's already
-        # rendered at the top of Status by _build_combat_tab.
         self._tabs.addTab(combat, "Status")
-        if not self._in_conflict:
+        if not skip_gear:
             gear = self._make_grouped_tab(
                 [("⚔  Equipment", equipment), ("🎒  Inventory", inventory)])
             self._tabs.addTab(gear, "Gear")
@@ -231,7 +235,26 @@ class CompactCharacterCard(QFrame):
         self._state.character_changed.connect(self._on_char_changed)
         self._state.lists_changed.connect(self._refresh)
         self._refresh()
+        if self._viewer_mode:
+            self._apply_viewer_lock()
         _fade_in(self)
+
+    def _apply_viewer_lock(self) -> None:
+        """v3.9.8: lock every interactive widget so the Player View
+        window can't accidentally mutate state. Walks the widget tree
+        and disables QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox,
+        QCheckBox, QPushButton, QSlider. QLabels and QProgressBars
+        stay enabled so they continue to render and animate normally.
+        """
+        from PyQt6.QtWidgets import (
+            QAbstractSpinBox, QLineEdit, QComboBox, QCheckBox,
+            QPushButton, QSlider, QListWidget,
+        )
+        lock_types = (QAbstractSpinBox, QLineEdit, QComboBox, QCheckBox,
+                      QPushButton, QSlider, QListWidget)
+        for w in self.findChildren(lock_types):
+            w.setEnabled(False)
+            w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def _on_char_changed(self, cid: str) -> None:
         if cid == self._instance.character.id:
@@ -449,7 +472,12 @@ class CompactCharacterCard(QFrame):
         row_def.addStretch(1)
         strip_l.addLayout(row_off)
         strip_l.addLayout(row_def)
-        v.addWidget(strip)
+        # v3.9.8: combat-numbers strip and fall-damage row are hidden
+        # from the player view — players shouldn't see the GM's combat
+        # math (attack values, defense values, HP loss estimates, fall
+        # damage forecast).
+        if not self._viewer_mode:
+            v.addWidget(strip)
 
         # Fall height + checkbox
         fall_row = QHBoxLayout(); fall_row.setSpacing(8)
@@ -471,7 +499,8 @@ class CompactCharacterCard(QFrame):
         self._apply_fall_chk.toggled.connect(self._on_apply_fall_toggled)
         fall_row.addWidget(self._apply_fall_chk)
         fall_row.addStretch(1)
-        v.addLayout(fall_row)
+        if not self._viewer_mode:
+            v.addLayout(fall_row)
 
         v.addStretch(1)
         return tab
@@ -1067,6 +1096,13 @@ class CompactCharacterCard(QFrame):
                 f"armor×{f.armor_mult:g})")
 
     def _refresh_combat_numbers(self) -> None:
+        # v3.9.8: the combat-numbers strip and fall-damage row aren't
+        # added to the layout in viewer mode; their child QLabels are
+        # garbage-collected during construction. Skip the refresh
+        # entirely rather than chase RuntimeError "object has been
+        # deleted" exceptions per-label.
+        if self._viewer_mode:
+            return
         c = self._instance.character
         spell = c.get_equipped_spell(self._state.state.spells)
         cb = me.derive_combat_view(c, self._state.state.weapons,
@@ -1145,6 +1181,11 @@ class CompactCharacterCard(QFrame):
                     except ValueError:
                         pass
             bar.set_tick_forecast(delta, turns_left)
+        # v3.9.8: skip the fall-row sync entirely in viewer mode — the
+        # widgets were never added to the layout and Qt has reclaimed
+        # them.
+        if self._viewer_mode:
+            return
         if self._fall_in.value() != c.fall_height:
             self._fall_in.blockSignals(True)
             self._fall_in.setValue(c.fall_height)
@@ -1213,18 +1254,21 @@ ACTIONS = (("attack", "Attack"), ("block", "Block"), ("cast", "Cast"),
 class ConflictPanel(QGroupBox):
     ATK_KINDS = ("martial", "ranged", "stealth", "arcana")
 
-    def __init__(self, state: StateManager, parent: QWidget | None = None) -> None:
-        super().__init__("Conflict Resolution", parent)
+    def __init__(self, state: StateManager,
+                 viewer_mode: bool = False,
+                 parent: QWidget | None = None) -> None:
+        super().__init__("Conflict" if viewer_mode else "Conflict Resolution",
+                          parent)
         self._state = state
-        # v3.4: removed setMinimumWidth so the panel can share thirds with
-        # the left/right pages.
+        self._viewer_mode = viewer_mode
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 14, 8, 8); outer.setSpacing(8)
-        info = QLabel("Each side picks ONE action. Equipment & inventory swaps "
-                       "are free in the side-page tabs.")
-        info.setWordWrap(True); info.setProperty("role", "dim")
-        outer.addWidget(info)
+        if not viewer_mode:
+            info = QLabel("Each side picks ONE action. Equipment & inventory swaps "
+                           "are free in the side-page tabs.")
+            info.setWordWrap(True); info.setProperty("role", "dim")
+            outer.addWidget(info)
 
         # v3.4: stack sides VERTICALLY in the narrow middle column so the
         # text doesn't get clipped.
@@ -1244,7 +1288,29 @@ class ConflictPanel(QGroupBox):
         self._state.encounter_changed.connect(self.refresh)
         self._state.character_changed.connect(self._on_state_char_changed)
         self.refresh()
+        if self._viewer_mode:
+            self._apply_viewer_lock()
         _fade_in(self)
+
+    def _apply_viewer_lock(self) -> None:
+        """v3.9.8: disable every interactive control + hide the outcome
+        rows. The player sees which action each side picked (chip
+        next to the name) but no damage / cost values."""
+        from PyQt6.QtWidgets import (
+            QAbstractSpinBox, QLineEdit, QComboBox, QCheckBox,
+            QPushButton, QSlider,
+        )
+        for col in (self._left_col, self._right_col):
+            # Hide the dmg/cost outcome row entirely (it carries Dealt
+            # / Recv / -SP / -MP numbers the GM doesn't want players
+            # seeing during a conflict).
+            col["outcome"].setVisible(False)
+            # Hide the sub_stack (form picker / use-shield / etc).
+            col["sub_stack"].setVisible(False)
+        for w in self.findChildren((QAbstractSpinBox, QLineEdit, QComboBox,
+                                       QCheckBox, QPushButton, QSlider)):
+            w.setEnabled(False)
+            w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def cleanup(self) -> None:
         """Called by EncounterTab._clear_layout before this panel is removed
@@ -1530,6 +1596,7 @@ class ConflictPanel(QGroupBox):
 
             stam_cost = mana_cost = 0
             atk_val = 0.0
+            side_data_extra_health_cost = 0
             if cur_action == "attack":
                 atk_val = self._state._outgoing_damage(inst.character, sel)
                 stam_cost, mana_cost = self._state._action_costs(inst.character, sel)
@@ -1564,8 +1631,6 @@ class ConflictPanel(QGroupBox):
                 # Stash health cost separately so the outcome row can
                 # render it. side_data picks this up below.
                 side_data_extra_health_cost = h
-            else:
-                side_data_extra_health_cost = 0
             side_data[side] = {
                 "atk_val": atk_val, "stam_cost": stam_cost,
                 "mana_cost": mana_cost,
@@ -1711,6 +1776,16 @@ class EncounterTab(QWidget):
         new_enc_btn = QPushButton("+ New encounter")
         new_enc_btn.clicked.connect(self._on_new_encounter)
         enc_tabs_row.addWidget(new_enc_btn)
+        # v3.9.8: "Player View" button opens a read-only mirror window
+        # the GM can show their players. Only one such window at a
+        # time — clicking again raises the existing one.
+        self._player_view_btn = QPushButton("👁  Player View")
+        self._player_view_btn.setToolTip(
+            "Open a read-only mirror window to show your players the "
+            "encounter without revealing damage / cost / inventory info.")
+        self._player_view_btn.clicked.connect(self._on_open_player_view)
+        enc_tabs_row.addWidget(self._player_view_btn)
+        self._player_view_win = None  # holds the open PlayerViewWindow, if any.
         outer.addLayout(enc_tabs_row)
 
         # v3.9 (C5): keyboard shortcuts on the encounter tab strip.
@@ -1822,6 +1897,29 @@ class EncounterTab(QWidget):
         self.refresh()
 
     # -- multi-encounter handlers --------------------------------
+    def _on_open_player_view(self) -> None:
+        """v3.9.8: open (or focus) the Player View mirror window."""
+        # Reuse the existing window if it's still alive — clicking the
+        # button repeatedly should NOT spawn duplicates.
+        existing = getattr(self, "_player_view_win", None)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+            except RuntimeError:
+                # Window's underlying C++ object was deleted; fall
+                # through and create a fresh one.
+                self._player_view_win = None
+        from ui.player_view import PlayerViewWindow
+        win = PlayerViewWindow(self._state, parent=None)
+        # parent=None gives the player view its own taskbar entry so
+        # the GM can move it to a second monitor / share it without
+        # the main window tagging along.
+        self._player_view_win = win
+        win.show()
+
     def _on_new_encounter(self) -> None:
         self._state.add_encounter()
 
