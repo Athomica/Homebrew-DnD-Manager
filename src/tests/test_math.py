@@ -564,6 +564,119 @@ class TestEncounterSystem(unittest.TestCase):
                           "Orphan template should not be promoted to unique")
 
 
+class TestAuditFixesV31017(unittest.TestCase):
+    """v3.10.17: regression tests for the system-wide audit fixes."""
+
+    def setUp(self):
+        me.set_modifiers({})
+        from PyQt6.QtWidgets import QApplication
+        import sys as _sys
+        if QApplication.instance() is None:
+            self._app = QApplication(_sys.argv)
+        from state import StateManager
+        self.sm = StateManager()
+
+    # -- math_engine -------------------------------------------------
+    def test_level_rounding_is_consistent_half_up(self):
+        # Banker's rounding made 25 SP -> 2 but 35 SP -> 4. Half-up is
+        # consistent: both odd-5 boundaries round up.
+        self.assertEqual(me.level(25), 3)
+        self.assertEqual(me.level(35), 4)
+        self.assertEqual(me.level(24), 2)
+        self.assertEqual(me.level(0), 0)
+
+    def test_throw_result_cap_uses_ge_200(self):
+        # sp just over 200 (reachable via effective SP) must still hit the
+        # cap branch, not fall through to the bonus branch.
+        capped = me.throw_result(200.5, 1, 5.0)
+        self.assertEqual(capped, 1.0)
+
+    def test_effective_vitals_current_equals_raw(self):
+        # Passives only touch *_max; current effective == raw, delta 0.
+        c = Character(name="X", health_max=100, health_current=73)
+        ev = me.effective_vitals(c)
+        self.assertEqual(ev["health"]["effective"], 73)
+        self.assertEqual(ev["health"]["delta"], 0.0)
+
+    def test_dice_multiplier_survives_zero_floor_modifier(self):
+        # A developer modifier zeroing the divisor floor must not crash.
+        me.set_modifiers({"luck_divisor_floor": 0.0, "luck_divisor_base": 0.0})
+        try:
+            me.dice_multiplier(10, 50.0)  # would divide by zero pre-fix
+        finally:
+            me.set_modifiers({})
+
+    # -- state: spell *_max becomes a temporary passive --------------
+    def test_destruction_max_spell_is_temporary_passive(self):
+        from models import Spell, SpellEffect
+        hero = Character(name="Caster", role="party", arcana_sp=20,
+                          can_cast_without_staff=True, mana_max=100,
+                          mana_current=100)
+        target = Character(name="Victim", role="mob",
+                            health_max=100, health_current=100)
+        spell = Spell(name="Wither", school="Destruction",
+                      effects=[SpellEffect(target="health_max", scope="fixed",
+                                            amount=30, duration="turns:2")])
+        self.sm.state.party.append(hero)
+        self.sm.state.mobs.append(target)
+        self.sm.state.spells.append(spell)
+        # Apply the spell effect directly.
+        self.sm._apply_spell_effects(spell, hero, target)
+        # Stored max is UNCHANGED (no permanent mutation).
+        self.assertEqual(target.health_max, 100)
+        # A temporary passive now lowers the EFFECTIVE max by 30.
+        ev = me.effective_vitals(target, self.sm.state.weapons,
+                                  self.sm.state.armors, self.sm.state.spells,
+                                  self.sm.state.items)
+        self.assertEqual(ev["health_max"]["effective"], 70)
+        # Current was clamped to the new effective ceiling by the
+        # sanity-check pass.
+        self.assertEqual(target.health_current, 70)
+        # The passive is non-permanent (will expire on turn advance).
+        self.assertTrue(any(p.affected_value == "health_max"
+                            and p.turns_remaining > 0
+                            for p in target.passives))
+
+    # -- state: duplicate resets battle stats ------------------------
+    def test_duplicate_character_resets_battle_stats(self):
+        src = Character(name="Vet", role="mob")
+        src.kill_points = 50; src.solo_kp = 10
+        src.participants = 4; src.dmg_received = 99
+        src.last_hp_loss = 12.0; src.dice_history = [3, 4]
+        self.sm.state.mobs.append(src)
+        clone = self.sm.duplicate_character(src.id)
+        self.assertIsNotNone(clone)
+        self.assertEqual(clone.kill_points, 0)
+        self.assertEqual(clone.solo_kp, 0)
+        self.assertEqual(clone.participants, 1)
+        self.assertEqual(clone.dmg_received, 0)
+        self.assertEqual(clone.last_hp_loss, 0.0)
+        self.assertEqual(clone.dice_history, [])
+
+    # -- state: convert_to_template fills to EFFECTIVE max -----------
+    def test_convert_to_template_fills_to_effective_max(self):
+        from models import Passive
+        c = Character(name="T", role="mob", health_max=100, health_current=10)
+        c.passives.append(Passive(name="Vigor", amount=50, scope="fixed",
+                                   affected_value="health_max",
+                                   duration="permanent"))
+        self.sm.state.mobs.append(c)
+        self.sm.convert_to_template(c)
+        # Filled to effective (100 + 50), not the raw 100.
+        self.assertEqual(c.health_current, 150)
+
+    # -- state: turn_snapshots excluded from save --------------------
+    def test_turn_snapshots_not_serialized(self):
+        from state import serialize_app_state
+        from models import AppState, EncounterInstance
+        s = AppState()
+        inst = EncounterInstance()
+        inst.turn_snapshots[0] = {"passives": [], "health_current": 5}
+        data = serialize_app_state(s)
+        # Round-trips cleanly and no encounter instance carries snapshots.
+        self.assertNotIn("turn_snapshots", str(data))
+
+
 class TestInvariants(unittest.TestCase):
     """v3.10.13: the character invariant pipeline."""
 

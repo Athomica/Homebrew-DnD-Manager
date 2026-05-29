@@ -1,5 +1,62 @@
 # DnD Manager Changelog
 
+## v3.10.17 — System-wide audit: bug fixes, failsafes, cleanup
+
+A full pass over the three core logic modules (math_engine, state,
+models + invariants), tracing every mechanic end-to-end. Fixes real
+bugs, adds failsafes, and removes dead code. 54 tests pass (8 new
+regression tests covering each fix).
+
+### Bugs fixed
+
+- **Turn rewind broke after any reload (critical).** Turn snapshots
+  were saved to disk with integer keys and live Passive objects; JSON
+  turned the keys into strings and the Passives into plain dicts, so
+  after an autosave + reload the step-back button silently restored
+  nothing. Snapshots are now correctly treated as transient
+  within-session undo state and excluded from the save file.
+- **Spell max-vital effects were permanent (critical).** A Destruction
+  spell that lowered a target's max HP/stamina/mana rewrote the stored
+  value forever, ignoring the effect's duration. It now applies as a
+  temporary passive on the *effective* max — it respects duration,
+  expires, reverses on turn step-back, and clamps current vitals to the
+  new ceiling. This matches the project-wide "passives carry vital
+  buffs, never stored fields" rule.
+- **Weapon status effects used the wrong weapon.** On-hit inflicted
+  passives read the character's *equipped* weapon instead of the one
+  the GM picked for that attack in the conflict panel, so picking a
+  different weapon applied the wrong (or no) status. Now uses the
+  picked weapon, consistent with the damage formula.
+- **Level calculation was inconsistent.** Python's banker's rounding
+  made 25 SP round to level 2 but 35 SP to level 4. Now uses
+  deterministic half-up rounding (both round up). *(Note: this can
+  change a character's level by 1 at exact half-boundaries — flag me
+  if your rules intend floor instead.)*
+- **Stat cap edge case.** The throw-result cap checked `sp == 200`
+  exactly; an effective SP slightly over 200 slipped past it. Changed
+  to `>= 200`.
+
+### Failsafes added
+
+- Vital-mutating entrypoints that previously skipped the invariant
+  pipeline now run it: spell effects, `cast_spell`, and
+  `convert_to_template` (which also now fills to *effective* max).
+- `dice_multiplier` guards against a divide-by-zero if a Developer
+  modifier zeroes the luck divisor floor.
+- `sp_earned` guards against negative participant counts (math-domain
+  error).
+- `duplicate_character` resets the copy's battle stats (kill points,
+  damage taken, dice history) so a duplicate starts clean.
+
+### Cleanup (dead code removed)
+
+- `math_engine`: `coordination`, `vital_max_gain_from_sp`,
+  `atk_current` (all uncalled).
+- `state`: `place_left`, `place_right`, `enter_conflict_mode`,
+  `exit_conflict_mode`, `is_character_locked`, `_atk_value_for_selection`
+  (all uncalled).
+- `models`: dead `set_sp`; tidied `float` defaults that were `int 0`.
+
 ## v3.10.16 — Mini-log, card level chips (UX pass 3/3, continued)
 
 Completes the deferred UX items from v3.10.15.

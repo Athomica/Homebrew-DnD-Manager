@@ -432,8 +432,8 @@ class CharacterSheet(QWidget):
         accumulates here as Unallocated SP.
 
         Several attributes still need to exist for the rest of the
-        sheet's refresh path to work (coordination + vital-calc labels
-        consumed by other sections), but they aren't displayed."""
+        sheet's refresh path to work (vital-calc labels consumed by
+        other sections), but they aren't displayed."""
         wrap = QWidget()
         form = QFormLayout(wrap)
         form.setContentsMargins(0, 0, 0, 0)

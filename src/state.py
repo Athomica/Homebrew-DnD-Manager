@@ -54,9 +54,20 @@ SCHEMA_VERSION = 7
 # Serialization helpers
 # ---------------------------------------------------------------------------
 
+# v3.10.17: dataclass fields that must NOT be serialized. `turn_snapshots`
+# is transient within-session undo state keyed by int turn numbers and
+# holding live Passive objects; JSON would stringify the int keys (so the
+# int-keyed step-back lookup misses after a reload) and downgrade the
+# nested Passives to plain dicts. Mid-combat undo simply doesn't need to
+# survive an app restart, so we drop it from the save entirely.
+_TRANSIENT_FIELDS = {"turn_snapshots"}
+
+
 def _to_dict(obj: Any) -> Any:
     if dataclasses.is_dataclass(obj):
-        return {f.name: _to_dict(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
+        return {f.name: _to_dict(getattr(obj, f.name))
+                for f in dataclasses.fields(obj)
+                if f.name not in _TRANSIENT_FIELDS}
     if isinstance(obj, list):
         return [_to_dict(x) for x in obj]
     if isinstance(obj, dict):
@@ -630,6 +641,16 @@ class StateManager(QObject):
         clone = copy.deepcopy(src)
         clone.id = new_id("c")
         clone.name = f"{src.name} (copy)"
+        # v3.10.17: a fresh duplicate must not inherit the source's
+        # accumulated battle stats — those are per-encounter history, not
+        # part of the character's identity. Reset to defaults so the copy
+        # starts clean (mirrors how a new encounter instance begins).
+        clone.kill_points = 0
+        clone.solo_kp = 0
+        clone.participants = 1
+        clone.dmg_received = 0
+        clone.last_hp_loss = 0.0
+        clone.dice_history = []
         self._list_for(src.role).append(clone)
         self.log_event("character_duplicated",
                        f"Duplicated '{src.name}' -> '{clone.name}'",
@@ -650,9 +671,13 @@ class StateManager(QObject):
 
     def convert_to_template(self, character: Character) -> None:
         character.is_template = True
-        character.health_current = character.health_max
-        character.stamina_current = character.stamina_max
-        character.mana_current = character.mana_max
+        # v3.10.17: fill to the EFFECTIVE max (passives + form mults
+        # applied), not the raw stored max. A template buffed past its
+        # base should start full at the buffed ceiling; a debuffed one
+        # must not start above its effective cap.
+        character.health_current = self._effective_max(character, "health")
+        character.stamina_current = self._effective_max(character, "stamina")
+        character.mana_current = self._effective_max(character, "mana")
         self.log_event("converted_to_template",
                        f"'{character.name}' is now a template", category="change",
                        character_id=character.id)
@@ -679,6 +704,8 @@ class StateManager(QObject):
         if character.mana_current < spell.mana_cost:
             return False, f"Not enough mana ({character.mana_current} < {spell.mana_cost})"
         character.mana_current -= spell.mana_cost
+        # v3.10.17 failsafe: re-establish invariants after the deduction.
+        self._sanity_check_character(character)
         self.log_event("spell_cast",
                        f"{character.name} cast '{spell.name}' (cost {spell.mana_cost})",
                        character_id=character.id,
@@ -845,9 +872,6 @@ class StateManager(QObject):
                         and not inst.is_template_instance):
                     return True
         return False
-
-    def is_character_locked(self, character_id: str) -> bool:
-        return self.is_character_in_encounter(character_id)
 
     def add_character_to_encounter(self, source: Character) -> tuple[bool, str, Optional[EncounterInstance]]:
         enc = self.start_encounter()
@@ -1069,26 +1093,6 @@ class StateManager(QObject):
         enc.items_used_right = []
         self.encounter_changed.emit()
         return True, "entered"
-
-    def enter_conflict_mode(self) -> bool:
-        ok, _ = self.toggle_conflict_mode()
-        return ok and (self.state.active_encounter is not None
-                       and self.state.active_encounter.in_conflict_mode)
-
-    def exit_conflict_mode(self) -> None:
-        enc = self.state.active_encounter
-        if enc is None or not enc.in_conflict_mode:
-            return
-        self.toggle_conflict_mode()
-
-    # Legacy single-pointer helpers kept for any stragglers (unused in v3.2 UI).
-    def place_left(self, instance_id: Optional[str]) -> None:
-        if instance_id:
-            self.assign_to_side(instance_id, "left")
-
-    def place_right(self, instance_id: Optional[str]) -> None:
-        if instance_id:
-            self.assign_to_side(instance_id, "right")
 
     def _invariant_ctx(self) -> InvariantContext:
         """v3.10.13: bundle the global lists the invariant pipeline
@@ -1492,13 +1496,23 @@ class StateManager(QObject):
                 setattr(recipient, attr_cur, new)
                 msgs.append(f"{recipient.name}: {eff.target}{delta:+d}")
             elif eff.target in ("health_max", "stamina_max", "mana_max"):
-                cur = getattr(recipient, eff.target)
-                delta = int(round(amt)) * sign
-                if eff.scope == "percent":
-                    delta = int(round(cur * (amt / 100.0))) * sign
-                new = max(50, cur + delta)
-                setattr(recipient, eff.target, new)
-                msgs.append(f"{recipient.name}: {eff.target}{delta:+d}")
+                # v3.10.17: a max-vital spell effect is now a TEMPORARY
+                # passive on the EFFECTIVE max, exactly like the _sp
+                # branch below — instead of permanently rewriting the
+                # recipient's stored max. This makes the effect respect
+                # the spell's `duration` (it expires), keeps it reversible
+                # on turn step-back, and matches the project-wide rule
+                # that passives — not stored fields — carry vital buffs.
+                p = Passive(name=f"{spell.name} ({eff.target})",
+                            amount=amt * sign,
+                            scope=("percent" if eff.scope == "percent"
+                                   else "fixed"),
+                            affected_value=eff.target,
+                            duration=eff.duration,
+                            source=f"spell:{spell.id}",
+                            active=True)
+                recipient.passives.append(p)
+                msgs.append(f"{recipient.name}: passive {p.name} {p.amount:+.1f}")
             elif eff.target.endswith("_sp"):
                 # Proficiency buff/debuff — add a transient Passive entry
                 # rather than mutating SP directly, so the original SP value
@@ -1512,6 +1526,10 @@ class StateManager(QObject):
                              active=True)
                 ptr.passives.append(p)
                 msgs.append(f"{ptr.name}: passive {p.name} {p.amount:+.1f}")
+        # v3.10.17: re-establish invariants after applying spell effects —
+        # a fresh max-debuff passive can lower the effective ceiling below
+        # the recipient's current vital, which must then be clamped.
+        self._sanity_check_character(recipient)
         return msgs
 
     # v3.10: _outgoing_damage moved up alongside _action_costs and gained
@@ -1659,13 +1677,21 @@ class StateManager(QObject):
         # attacker's action was 'attack' (a Cast doesn't carry the
         # weapon's status payload). The inflicted passive is deep-copied
         # so editing it on the victim doesn't mutate the source weapon.
-        def _apply_weapon_inflictions(attacker: Character,
+        def _apply_weapon_inflictions(side: str,
+                                       attacker: Character,
                                        defender: Character,
                                        atk_action: str,
                                        outgoing: float) -> None:
             if outgoing <= 0 or atk_action != "attack":
                 return
-            weapon = attacker.get_active_weapon(self.state.weapons)
+            # v3.10.17: use the SAME weapon the GM picked for this attack
+            # in the conflict panel (which is also what the damage formula
+            # used), falling back to the character's equipped weapon only
+            # when no explicit pick was made. Previously this always read
+            # the equipped weapon, so picking a different weapon in the
+            # panel inflicted the wrong (or no) status payload.
+            weapon = _picked_weapon(side) or attacker.get_active_weapon(
+                self.state.weapons)
             if weapon is None:
                 return
             for tmpl in getattr(weapon, "inflict_passives", []) or []:
@@ -1680,9 +1706,9 @@ class StateManager(QObject):
                     f"{defender.name} suffers '{p.name}' from "
                     f"{attacker.name}'s {weapon.name}")
 
-        _apply_weapon_inflictions(left.character, right.character,
+        _apply_weapon_inflictions("left", left.character, right.character,
                                     enc.left_action, left_dmg)
-        _apply_weapon_inflictions(right.character, left.character,
+        _apply_weapon_inflictions("right", right.character, left.character,
                                     enc.right_action, right_dmg)
 
         # v3.10.1: arcana ATTACK with a destruction spell should also
@@ -1913,12 +1939,6 @@ class StateManager(QObject):
             names = ", ".join(a.character.name for a in attackers)
             msgs.append(f"{names} each earned {value} KP "
                         f"for killing {victim_inst.character.name}.")
-
-    def _atk_value_for_selection(self, character: Character, selection: str) -> float:
-        cb = me.derive_combat_view(character, self.state.weapons,
-                                   self.state.armors, self.state.items,
-                                   spell=self._equipped_spell(character))
-        return cb.get(f"{selection}_atk", 0)
 
     def end_encounter(self) -> str:
         """Commit encounter changes back to the Global Character List, then clear.

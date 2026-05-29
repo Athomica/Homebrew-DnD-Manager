@@ -66,7 +66,13 @@ def passive_turns_remaining(p) -> int:
 # ---------------------------------------------------------------------------
 
 def level(total_sp: int) -> int:
-    return round(total_sp / 10)
+    # v3.10.17: deterministic half-up rounding. Python's built-in round()
+    # uses banker's rounding (round-half-to-even), so 25 SP rounded to
+    # level 2 but 35 SP rounded to level 4 — inconsistent at exact .5
+    # boundaries (odd multiples of 5 SP). math.floor(x + 0.5) always
+    # rounds .5 up, matching the intuitive "every 10 SP is a level,
+    # halfway rounds up" reading.
+    return int(math.floor(total_sp / 10 + 0.5))
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +109,11 @@ def tier_sum(sp: float, prof_name: str) -> float:
 
 def dice_multiplier(dice: int, luck_tier_sum: float) -> float:
     """Luck-modified dice multiplier. Applies to ALL proficiency bonuses."""
-    divisor = max(_eff("luck_divisor_floor"), _eff("luck_divisor_base") - luck_tier_sum)
+    # v3.10.17 failsafe: the floor normally keeps the divisor well above
+    # zero, but a Developer-view modifier could set luck_divisor_floor to
+    # 0; guard against a divide-by-zero with a tiny positive minimum.
+    divisor = max(1e-9, _eff("luck_divisor_floor"),
+                  _eff("luck_divisor_base") - luck_tier_sum)
     return min(2, (dice - 1) / divisor)
 
 
@@ -121,7 +131,7 @@ def throw_result(sp: float, dice: int, dice_bonus_val: float) -> float:
         (sp <= 99 and dice <= 4) or
         (sp <= 189 and dice <= 3) or
         (sp <= 199 and dice <= 2) or
-        (sp == 200 and dice <= 1)):
+        (sp >= 200 and dice <= 1)):
         result = float(dice)
     else:
         result = dice + dice_bonus_val
@@ -180,10 +190,6 @@ def def_value(armor_base: int, armor_throw: float, armor_sp: float,
 # ---------------------------------------------------------------------------
 # Section 5.8 - ATK
 # ---------------------------------------------------------------------------
-
-def atk_current(active_weapon: Optional[Weapon]) -> int:
-    return active_weapon.damage if active_weapon else 0
-
 
 def _generic_atk(weapon_damage: int, prof_throw: float, prof_sp: float,
                  prof_form_mult: float, dice: int,
@@ -305,14 +311,11 @@ def shielded_hp_loss(dmg_received: float, def_value: float,
 # Section 5.13 - KP & SP earning
 # ---------------------------------------------------------------------------
 
-def coordination(total_kp: int, participants: int) -> float:
-    if total_kp <= 0 or participants <= 0:
-        return 0.0
-    return (math.log(1 + total_kp / 100) / 20 * math.log(1 + participants)) * 1000
-
-
 def sp_earned(solo_kp: int, total_kp: int, participants: int, current_level: int) -> float:
-    if participants == 0:
+    # v3.10.17: guard participants <= 0 (not just == 0). A negative
+    # participant count would reach math.log(1 + participants) and raise
+    # a domain error for participants <= -1.
+    if participants <= 0:
         return 0.0
     base = solo_kp + (total_kp / participants) * (
         1 + math.log(1 + total_kp / 100) / 20 * math.log(1 + participants)
@@ -584,10 +587,14 @@ def effective_vitals(character: Character,
             "effective": eff_max,
             "delta": eff_max - raw_max,
         }
+        # v3.10.17: passives only ever affect *_max (the picker offers
+        # only _max keys and legacy current-vital passives are migrated
+        # to _max on load). So the current vital's effective value is
+        # just its raw stored value — no passive lookup, no footgun where
+        # a stray affected_value=="health" passive could move current HP.
         raw_cur = float(getattr(character, f"{vital}_current", 0) or 0)
-        eff_cur, cur_delta = effective_value(raw_cur, vital, passives)
         out[vital] = {
-            "raw": raw_cur, "effective": eff_cur, "delta": cur_delta,
+            "raw": raw_cur, "effective": raw_cur, "delta": 0.0,
         }
     return out
 
@@ -735,9 +742,11 @@ def spell_base_damage(spell) -> float:
         if e.target == "damage":
             saw_effect = True
             amt = float(e.amount)
-            if e.scope == "percent":
-                amt = amt  # percent of incoming weapon base — but spell.damage
-                            # base is 100 by convention when scope is percent
+            # v3.10.17: percent damage is evaluated against a notional
+            # base of 100 (so "50% damage" == 50). That makes the percent
+            # and fixed branches numerically identical here — kept as a
+            # single path; the convention is documented rather than
+            # encoded as a redundant `amt = amt`.
             dmg += amt
     if saw_effect:
         return dmg
@@ -769,14 +778,6 @@ def spell_effect_amount(effect, caster: Character) -> float:
         amt *= max(0.0, throw) / 10.0
         amt *= (1 + caster.effective_sp("arcana") / 100.0)
     return amt
-
-
-# v3.1 helper: how much vital max would be gained if X SP were added to the
-# character's proficiency total?
-def vital_max_gain_from_sp(current_total_sp: int, added_sp: float) -> int:
-    cur_level = level(current_total_sp)
-    new_level = level(int(round(current_total_sp + added_sp)))
-    return vital_max(new_level) - vital_max(cur_level)
 
 
 # ---------------------------------------------------------------------------

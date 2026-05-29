@@ -207,8 +207,8 @@ class Form:
     # mana, health, both, or nothing — so we carry both fields. Legacy
     # `mana_to_enter` saves load into `enter_mana_cost` via the
     # hydrator. `maintain_cost` was dropped (not used anywhere).
-    enter_mana_cost: float = 0
-    enter_health_cost: float = 0
+    enter_mana_cost: float = 0.0
+    enter_health_cost: float = 0.0
     # Legacy field kept on the dataclass purely so old saves load
     # without raising; it's never read or shown.
     mana_to_enter: float = 0
@@ -380,9 +380,6 @@ class Character:
 
     def sp_for(self, prof_name: str) -> int:
         return getattr(self, f"{prof_name}_sp", 0)
-
-    def set_sp(self, prof_name: str, value: int) -> None:
-        setattr(self, f"{prof_name}_sp", value)
 
     def total_sp(self) -> int:
         return sum(self.sp_for(p) for p in PROFICIENCIES)
@@ -667,7 +664,7 @@ MODIFIER_DEFS: dict[str, tuple[float, bool, str]] = {
 
 def modifier_step(modifier_key: str, granularity: int) -> float:
     if granularity <= 0:
-        return 0
+        return 0.0
     default, is_int, _ = MODIFIER_DEFS[modifier_key]
     if is_int:
         steps = {1: 1, 2: 5, 3: 10, 4: 25, 5: 100}
