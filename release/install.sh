@@ -14,7 +14,7 @@ set -euo pipefail
 # Configuration
 # ---------------------------------------------------------------------------
 REPO="athomica/homebrew-dnd-manager"
-BRANCH="claude/optimistic-pascal-u4dyW"
+BRANCH="claude/youthful-thompson-iY8TX"
 BASE="https://raw.githubusercontent.com/$REPO/$BRANCH/release"
 
 DEST="$HOME/DnDManager"

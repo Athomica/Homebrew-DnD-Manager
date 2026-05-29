@@ -1,5 +1,17 @@
 # DnD Manager Changelog
 
+## v3.1.3 — Vital editing and Global Character List fixes
+
+### Critical fixes
+- **Current vital values can be raised again.** Increasing a vital's effective
+  max (HP/Stamina/Mana) now also lifts the ceiling on the current-value field,
+  so you can top the current value up to the new max. Previously the current
+  field stayed capped at whatever the max was when the sheet was opened.
+- **Global Character List view toggle no longer crashes.** A botched v3.1.2
+  edit had moved the tab's state wiring (and the DM/Developer view button
+  setup) into the wrong method, leaving the button blank and crashing the app
+  when it was clicked. The wiring is restored.
+
 ## v3.1.1 — Bug-fix and refinement pass
 
 ### Critical fixes
