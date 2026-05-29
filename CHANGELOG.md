@@ -1,5 +1,32 @@
 # DnD Manager Changelog
 
+## v3.10.16 — Mini-log, card level chips (UX pass 3/3, continued)
+
+Completes the deferred UX items from v3.10.15.
+
+- **Mini-log column** (`ui/components/mini_log.py`): a compact,
+  read-only tail of the most recent combat events lives under the
+  conflict panel, so the GM sees damage / rests / inflicted passives /
+  deaths without switching to the Combat Log tab. Listens to
+  `log_appended` + `encounter_changed`, shows the last 12 combat
+  entries, and auto-scrolls to the newest (deferred scroll so it lands
+  after layout settles).
+- **Card level chips**: `CompactCharacterCard` (encounter side panels
+  AND player-view cards) now shows a `Lvl N` chip beside the name,
+  matching the conflict-panel status strip. The cards already render
+  full HP/SP/MP bars, so level was the only missing piece for parity.
+
+### On the context drawer
+
+The third deferred item — a slide-out "context drawer" replacing the
+action sub-pane carousel — is intentionally **not** built as a literal
+drawer. The v3.10.14 segmented action row + `ShrinkStack` already
+delivers the drawer's stated goal (the panel stays put; only the small
+input area under the buttons changes, sized to the current action). In
+the narrow third-width conflict column a horizontal slide-out would be
+cramped and add animation/overlay complexity that works against the
+"less bug-prone" goal. The vertical sub-pane is the better fit here.
+
 ## v3.10.15 — Conflict status strip (UX pass 3/3, first pass)
 
 First slice of the UX redesign.

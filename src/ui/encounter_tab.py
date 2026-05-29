@@ -141,6 +141,13 @@ class CompactCharacterCard(QFrame):
         self._name_label = QLabel(instance.character.name)
         self._name_label.setProperty("role", "header")
         hl.addWidget(self._name_label)
+        # v3.10.16: compact level chip beside the name, mirroring the
+        # conflict-panel status strip (the vital bars below already show
+        # HP/SP/MP, so the card only needs the level here for parity).
+        self._level_chip = QLabel("")
+        self._level_chip.setStyleSheet(
+            "color: #9a8; font-weight: bold; padding: 0 4px;")
+        hl.addWidget(self._level_chip)
         hl.addStretch(1)
         hl.addWidget(QLabel("Turn:"))
         self._turn_label = QLabel(str(instance.turn))
@@ -1308,6 +1315,7 @@ class CompactCharacterCard(QFrame):
     def _refresh(self) -> None:
         c = self._instance.character
         self._name_label.setText(c.name)
+        self._level_chip.setText(f"Lvl {me.level(c.total_sp())}")
         self._turn_label.setText(str(self._instance.turn))
         parts = []
         for i, d in enumerate(self._instance.dice_history):
@@ -2294,6 +2302,14 @@ class EncounterTab(QWidget):
         self._conflict_btn.setStyleSheet("QPushButton { font-size: 22px; padding: 24px; }")
         self._conflict_btn.clicked.connect(self._on_toggle_conflict)
 
+        # v3.10.16: persistent compact log shown under the conflict panel
+        # so outcomes are visible without switching to the Combat Log tab.
+        # Created once and kept across refreshes; visibility toggled by
+        # conflict state.
+        from ui.components.mini_log import MiniLog
+        self._mini_log = MiniLog(self._state)
+        self._mini_log.setVisible(False)
+
         self._right_container = QFrame(); self._right_container.setFrameShape(QFrame.Shape.StyledPanel)
         self._right_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._right_inner = QVBoxLayout(self._right_container)
@@ -2841,7 +2857,8 @@ class EncounterTab(QWidget):
         enc = self._state.state.active_encounter
         self._clear_layout(self._left_inner, keep_widgets=(self._left_empty,))
         self._clear_layout(self._right_inner, keep_widgets=(self._right_empty,))
-        self._clear_layout(self._middle_layout, keep_widgets=(self._conflict_btn,))
+        self._clear_layout(self._middle_layout,
+                           keep_widgets=(self._conflict_btn, self._mini_log))
         self._clear_layout(self._bin_layout, keep_widgets=(self._bin_empty,))
         if enc is None:
             # v3.7.1: no prominent empty-state placeholder anymore — it
@@ -2956,11 +2973,16 @@ class EncounterTab(QWidget):
         self._conflict_btn.setVisible(True)
         if enc.in_conflict_mode and l_inst and r_inst:
             panel = ConflictPanel(self._state)
-            self._middle_layout.addWidget(panel, 1)
+            self._middle_layout.addWidget(panel, 3)
+            # v3.10.16: compact log under the conflict panel.
+            self._mini_log.setVisible(True)
+            self._mini_log._refresh()
+            self._middle_layout.addWidget(self._mini_log, 1)
             self._conflict_btn.setText("Exit Conflict (apply damage)")
             self._conflict_btn.setEnabled(True)
             self._middle_layout.addWidget(self._conflict_btn)
         else:
+            self._mini_log.setVisible(False)
             self._conflict_btn.setText("Enter Conflict")
             ok_to_enter = l_inst is not None and r_inst is not None
             self._conflict_btn.setEnabled(ok_to_enter)
