@@ -1447,7 +1447,7 @@ class ConflictPanel(QGroupBox):
     }
 
     def _build_side(self, side: str) -> dict:
-        from PyQt6.QtWidgets import QStackedWidget
+        from ui.components.shrink_stack import ShrinkStack
         box = QGroupBox(side.title())
         layout = QVBoxLayout(box); layout.setSpacing(6)
         layout.setContentsMargins(8, 14, 8, 8)
@@ -1509,9 +1509,10 @@ class ConflictPanel(QGroupBox):
         #   2  Dodge  — (empty pane.)
         #   3  Shift  — form picker + cost chip.
         #   4  Cast   — searchable non-destruction spell picker.
-        sub_stack = QStackedWidget()
-        sub_stack.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                  QSizePolicy.Policy.Fixed)
+        # v3.10.14: ShrinkStack sizes to the CURRENT pane, so selecting
+        # Dodge / Rest (short panes) no longer reserves the tall height
+        # of the Attack / Cast panes.
+        sub_stack = ShrinkStack()
         # ── Pane 0: Attack ─────────────────────────────────────────
         atk_pane = QFrame()
         atk_l = QVBoxLayout(atk_pane)

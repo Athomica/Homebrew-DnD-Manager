@@ -108,6 +108,19 @@ def build_stylesheet() -> str:
             padding: 5px 8px;
             selection-background-color: {c['accent_wine']};
         }}
+        /* v3.10.14: single-line entry fields and dropdowns keep a
+           FIXED height — only their width flexes with the layout.
+           Multi-line editors (QTextEdit / QPlainTextEdit) are
+           deliberately excluded so they can still grow vertically.
+           Vertical padding is trimmed (the fixed height supplies the
+           breathing room) so the field stays compact without clipping
+           the ~13px text. */
+        QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+            min-height: 26px;
+            max-height: 26px;
+            padding-top: 2px;
+            padding-bottom: 2px;
+        }}
         QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
         QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{
             border: 1px solid {c['accent_gold']};

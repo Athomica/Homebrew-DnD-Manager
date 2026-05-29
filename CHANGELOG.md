@@ -1,5 +1,23 @@
 # DnD Manager Changelog
 
+## v3.10.14 — UI density + fixed-height inputs (UI pass 2/3)
+
+Reduces wasted space and makes the layout scale predictably.
+
+- **Fixed-height inputs, flexible width**: single-line entry fields
+  and dropdowns (`QLineEdit`, `QSpinBox`, `QDoubleSpinBox`,
+  `QComboBox`) now have a fixed 26px height set once in the global
+  stylesheet — they stretch horizontally with the layout but never
+  grow/shrink vertically. Multi-line editors (`QTextEdit`,
+  `QPlainTextEdit`) are intentionally left flexible so they can still
+  grow. One QSS rule covers the whole app.
+- **ShrinkStack** (`ui/components/shrink_stack.py`): the conflict
+  panel's action sub-panes now size to the *current* pane instead of
+  the tallest one, so picking Dodge or Rest no longer leaves a dead
+  gap the height of the Attack / Cast panes.
+- Tests unchanged (46 pass); verified the conflict panel renders
+  without clipping at the new input height.
+
 ## v3.10.13 — Invariant pipeline (sequencing pass 1/3)
 
 First of three sequenced passes. Extracts the ad-hoc
