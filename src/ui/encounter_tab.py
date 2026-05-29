@@ -614,10 +614,13 @@ class EncounterTab(QWidget):
             self._name_edit.setText("")
             self._name_edit.blockSignals(False)
 
-        # Clear strip & bin & middle
+        # Clear strip & bin & middle. The "Opponent?" button is persistent
+        # (created once in __init__ and reused), so it must be kept - otherwise
+        # _clear_layout deleteLater()s it and the next refresh touches a dead
+        # C++ object.
         self._clear_layout(self._strip_layout, keep_widgets=(self._strip_empty,))
         self._clear_layout(self._bin_layout, keep_widgets=(self._bin_empty,))
-        self._clear_layout(self._middle_layout)
+        self._clear_layout(self._middle_layout, keep_widgets=(self._opponent_btn,))
 
         # Clear left & right (keep the empty placeholders)
         self._clear_layout(self._left_inner, keep_widgets=(self._left_empty,))
@@ -631,9 +634,8 @@ class EncounterTab(QWidget):
             self._right_empty.setText("\n(no active encounter)\n")
             self._left_empty.setVisible(True)
             self._right_empty.setVisible(True)
+            self._opponent_btn.setVisible(True)
             self._opponent_btn.setEnabled(False)
-            self._middle_layout.addWidget(self._opponent_btn)
-            self._middle_layout.addStretch(1)
             return
 
         # Strip
@@ -694,11 +696,13 @@ class EncounterTab(QWidget):
             self._right_empty.setVisible(True)
             self._right_empty.setText("\n(right page is empty)\n\nUse 'R →' on a chip above\n")
 
-        # Middle column
+        # Middle column. _opponent_btn is persistent (kept across clears), so we
+        # toggle its visibility rather than re-adding it. The ConflictPanel is
+        # transient; insert it ahead of the button so it sits at the top.
         if enc.in_conflict_mode and l_inst and r_inst:
+            self._opponent_btn.setVisible(False)
             panel = ConflictPanel(self._state)
-            self._middle_layout.addWidget(panel)
+            self._middle_layout.insertWidget(0, panel)
         else:
-            self._middle_layout.addWidget(self._opponent_btn)
-            self._middle_layout.addStretch(1)
+            self._opponent_btn.setVisible(True)
             self._opponent_btn.setEnabled(l_inst is not None and r_inst is not None)
