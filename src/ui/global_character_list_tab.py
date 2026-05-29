@@ -297,6 +297,10 @@ class GlobalCharacterListTab(QWidget):
         tabs.addTab(self._npc_sub, "NPCs")
         outer.addWidget(tabs)
 
+        self._state = state
+        self._state.view_mode_changed.connect(self._refresh_view_btn)
+        self._refresh_view_btn()
+
     def tear_down_detail_sheets(self) -> None:
         """Called by the main window before a state swap (e.g. File > New) so
         no stale CharacterSheet receives a signal about state it doesn't own."""
@@ -305,10 +309,6 @@ class GlobalCharacterListTab(QWidget):
                 sub.tear_down_detail_sheet()
             except Exception:
                 pass
-
-        self._state = state
-        self._state.view_mode_changed.connect(self._refresh_view_btn)
-        self._refresh_view_btn()
 
     def _refresh_view_btn(self) -> None:
         is_dev = self._state.state.developer_view

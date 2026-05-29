@@ -99,8 +99,16 @@ class VitalBar(QWidget):
 
     def _refresh_bar(self, *_args, animate: bool = True,
                      prev_value: int | None = None) -> None:
-        cur = self._current_input.value()
         mx = max(1, self._max_input.value())
+        # Keep the current-value input's ceiling in sync with the max. The
+        # ceiling is otherwise only set in set_values() (at mount), so after
+        # the user raises the max the current value would stay capped at the
+        # old max and could never be topped up to match the new max.
+        if self._current_input.maximum() != mx:
+            self._current_input.blockSignals(True)
+            self._current_input.setMaximum(mx)
+            self._current_input.blockSignals(False)
+        cur = self._current_input.value()
         if cur > mx:
             cur = mx
             self._current_input.blockSignals(True)
