@@ -1,5 +1,30 @@
 # DnD Manager Changelog
 
+## v3.10.15 — Conflict status strip (UX pass 3/3, first pass)
+
+First slice of the UX redesign.
+
+- **Per-side status strip** in the conflict panel: the header now
+  shows `Name · Lvl N · HP cur/max · SP cur/max · MP cur/max` on one
+  color-coded line (effective max, so it agrees with the bars). This
+  replaces the bare bold name and surfaces vitals at a glance without
+  expanding the panel.
+- Builds on v3.10.14's segmented action row and ShrinkStack sub-panes
+  — the conflict panel is now noticeably tighter and more scannable.
+
+### Flagged for a follow-up pass
+
+The remaining redesign items are larger and carry more regression
+risk against the working conflict flow, so they are deferred to a
+dedicated pass rather than rushed in here:
+
+- **Context drawer** replacing the action sub-pane carousel (slide
+  inputs in from the side instead of swapping a stacked widget).
+- **Compact log column** as a third column of the conflict view so
+  outcomes are visible without switching to the events tab.
+- Applying the same status-strip treatment to the character sheet
+  and player-view cards for consistency.
+
 ## v3.10.14 — UI density + fixed-height inputs (UI pass 2/3)
 
 Reduces wasted space and makes the layout scale predictably.

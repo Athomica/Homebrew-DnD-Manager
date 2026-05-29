@@ -1453,11 +1453,18 @@ class ConflictPanel(QGroupBox):
         layout.setContentsMargins(8, 14, 8, 8)
         name_lbl = QLabel("(no character)")
         name_lbl.setStyleSheet("font-size: 13pt; font-weight: bold;")
+        # v3.10.15: compact status strip — level + HP/SP/MP chips on the
+        # SAME line as the name, so the header is one row instead of a
+        # name row plus a separate vitals block. Populated in refresh().
+        status_lbl = QLabel("")
+        status_lbl.setTextFormat(Qt.TextFormat.RichText)
         action_chip = QLabel("")
         action_chip.setStyleSheet("padding: 2px 6px; border-radius: 3px;")
         name_row = QHBoxLayout()
-        name_row.setSpacing(6)
-        name_row.addWidget(name_lbl); name_row.addStretch(1)
+        name_row.setSpacing(8)
+        name_row.addWidget(name_lbl)
+        name_row.addWidget(status_lbl)
+        name_row.addStretch(1)
         name_row.addWidget(action_chip)
         layout.addLayout(name_row)
 
@@ -1626,6 +1633,7 @@ class ConflictPanel(QGroupBox):
 
         return {
             "side": side, "box": box, "name_lbl": name_lbl,
+            "status_lbl": status_lbl,
             "action_chip": action_chip,
             "action_radios": action_buttons, "atk_radios": atk_radios,
             "sub_stack": sub_stack,
@@ -1856,6 +1864,27 @@ class ConflictPanel(QGroupBox):
             self._state.encounter_changed.emit()
         return handler
 
+    def _status_html(self, character) -> str:
+        """v3.10.15: compact one-line status strip for the conflict
+        header — level plus colored HP/SP/MP chips showing current /
+        effective-max. Effective max reflects passives and form mults
+        (via effective_vitals) so the strip agrees with the bars."""
+        ev = me.effective_vitals(
+            character, self._state.state.weapons, self._state.state.armors,
+            self._state.state.spells, self._state.state.items)
+        lvl = me.level(character.total_sp())
+        chips = [f"<span style='color:#9a8;'>Lvl {lvl}</span>"]
+        for key, label, color in (("health", "HP", "#d96666"),
+                                    ("stamina", "SP", "#d6b36a"),
+                                    ("mana", "MP", "#6a9ad6")):
+            cur = int(getattr(character, f"{key}_current", 0) or 0)
+            mx = int(round(ev[f"{key}_max"]["effective"]))
+            chips.append(
+                f"<span style='color:{color};'>{label} "
+                f"{cur}<span style='color:#777;'>/{mx}</span></span>")
+        sep = " <span style='color:#555;'>·</span> "
+        return sep.join(chips)
+
     def refresh(self) -> None:
         """v3.4: pure display refresh. Radios mutate enc state directly via
         their toggled handlers — this method never writes back."""
@@ -1877,11 +1906,13 @@ class ConflictPanel(QGroupBox):
             inst = self._state.active_instance(side)
             if inst is None or inst.character is None:
                 col["name_lbl"].setText("(no character)")
+                col["status_lbl"].setText("")
                 col["action_chip"].setText("")
                 col["outcome"].setText(
                     "<span style='color:#888;'>(no character on this side)</span>")
                 continue
             col["name_lbl"].setText(inst.character.name)
+            col["status_lbl"].setText(self._status_html(inst.character))
             cur_action = (enc.left_action if side == "left" else enc.right_action)
             # v3.10.8: grey out Cast + Arcana when the character has
             # no way to channel magic (not innate AND no staff/wand
