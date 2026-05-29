@@ -1,5 +1,19 @@
 # DnD Manager Changelog
 
+## v3.10.12 — Rest action
+
+New "Rest" action available alongside Attack / Block / Cast /
+Dodge / Shift in the conflict panel (and mirrored into the player
+view, since both surfaces share `ConflictPanel`).
+
+- Rest restores **20% of effective max stamina** as current
+  stamina and **10% of effective max mana** as current mana, then
+  runs the sanity-check pass so we never overheal past the cap.
+- New pane in the action stack with a one-line description and
+  no inputs (rest takes no targets).
+- Test covers a 100-max-stamina / 200-max-mana hero earning +20
+  stamina / +20 mana from a rest.
+
 ## v3.10.11 — Procs stack; legacy migration; sanity check pass
 
 Two carryover bugs from v3.10.10 fixed, and the proc model rewritten

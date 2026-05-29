@@ -1350,7 +1350,7 @@ class CompactCharacterCard(QFrame):
 # ---------------------------------------------------------------------------
 
 ACTIONS = (("attack", "Attack"), ("block", "Block"), ("cast", "Cast"),
-            ("dodge", "Dodge"), ("shift", "Shift"))
+            ("dodge", "Dodge"), ("shift", "Shift"), ("rest", "Rest"))
 
 
 class ConflictPanel(QGroupBox):
@@ -1443,6 +1443,7 @@ class ConflictPanel(QGroupBox):
         "cast":   ("🔮", "Cast",   "#c46ad6"),
         "dodge":  ("⚡", "Dodge",  "#d6c46a"),
         "shift":  ("🔄", "Shift",  "#6acf9a"),
+        "rest":   ("💤", "Rest",   "#9ac46a"),
     }
 
     def _build_side(self, side: str) -> dict:
@@ -1495,7 +1496,7 @@ class ConflictPanel(QGroupBox):
         action_buttons["attack"].blockSignals(False)
         # Round the outer corners of the leftmost / rightmost buttons.
         first = action_buttons["attack"]
-        last = action_buttons["shift"]
+        last = action_buttons["rest"]
         first.setStyleSheet(first.styleSheet() + "\nQPushButton { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }")
         last.setStyleSheet(last.styleSheet() + "\nQPushButton { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }")
         layout.addLayout(action_row)
@@ -1599,6 +1600,18 @@ class ConflictPanel(QGroupBox):
         target_row.addWidget(cast_target_combo, 1)
         cast_l.addLayout(target_row)
         sub_stack.addWidget(cast_pane)  # index 4
+
+        # ── Pane 5: Rest ───────────────────────────────────────────
+        # v3.10.12: rest restores 20% stamina + 10% mana off the
+        # effective max. The pane just describes what will happen;
+        # no inputs are needed.
+        rest_pane = QFrame()
+        rest_l = QHBoxLayout(rest_pane); rest_l.setContentsMargins(8, 4, 8, 4)
+        rest_lbl = QLabel("Recovers 20% stamina + 10% mana (of effective max).")
+        rest_lbl.setStyleSheet("color: #9ac46a;")
+        rest_l.addWidget(rest_lbl); rest_l.addStretch(1)
+        sub_stack.addWidget(rest_pane)  # index 5
+
         layout.addWidget(sub_stack)
 
         # v3.4.6: inline outcome row — dealt / received / SP / MP on a single
@@ -1910,7 +1923,7 @@ class ConflictPanel(QGroupBox):
             # Show the correct pane of the single sub-control stack.
             #   attack: 0  block: 1  dodge: 2 (empty)  shift: 3  cast: 4
             pane_idx = {"attack": 0, "block": 1, "dodge": 2,
-                         "shift": 3, "cast": 4}.get(cur_action, 2)
+                         "shift": 3, "cast": 4, "rest": 5}.get(cur_action, 2)
             col["sub_stack"].setCurrentIndex(pane_idx)
             # v3.10: populate the Attack pane's weapon/spell dropdown
             # based on the currently-checked atk-type radio.

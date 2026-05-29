@@ -470,6 +470,33 @@ class TestEncounterSystem(unittest.TestCase):
         self.assertEqual(ev["health_max"]["effective"], 180)
         self.assertEqual(inst.character.health_current, 180)
 
+    def test_rest_action_recovers_stamina_and_mana(self):
+        # v3.10.12: choosing the "rest" action restores 20% of
+        # effective max stamina and 10% of effective max mana.
+        hero = Character(name="R", role="party",
+                          stamina_max=100, stamina_current=10,
+                          mana_max=200, mana_current=50,
+                          health_max=100, health_current=100)
+        foe = Character(name="F", role="mob",
+                         stamina_max=100, stamina_current=100,
+                         mana_max=100, mana_current=100,
+                         health_max=100, health_current=100)
+        self.sm.state.party.append(hero)
+        self.sm.state.mobs.append(foe)
+        _, _, h = self.sm.add_character_to_encounter(hero)
+        _, _, f = self.sm.add_character_to_encounter(foe)
+        self.sm.assign_to_side(h.instance_id, "left")
+        self.sm.assign_to_side(f.instance_id, "right")
+        enc = self.sm.state.active_encounter
+        self.sm.start_combat()
+        self.sm.toggle_conflict_mode()
+        enc.left_action = "rest"
+        enc.right_action = "dodge"
+        self.sm.resolve_conflict()
+        # +20 stamina (20% of 100), +20 mana (10% of 200)
+        self.assertEqual(h.character.stamina_current, 30)
+        self.assertEqual(h.character.mana_current, 70)
+
     def test_legacy_passive_hydrate_migrates_current_to_max(self):
         # v3.10.11: legacy saves with affected_value=health/stamina/mana
         # are migrated to the _max key on load.

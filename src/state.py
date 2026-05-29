@@ -1731,6 +1731,25 @@ class StateManager(QObject):
                         msgs.append(msg)
                     else:
                         msgs.append(f"item use failed: {msg}")
+            elif action == "rest":
+                # v3.10.12: rest recovers 20% of effective max stamina
+                # and 10% of effective max mana, clamped by the sanity
+                # check pass so we never overheal past the cap.
+                ev = me.effective_vitals(
+                    inst.character, self.state.weapons, self.state.armors,
+                    self.state.spells, self.state.items)
+                stam_max = float(ev["stamina_max"]["effective"])
+                mana_max = float(ev["mana_max"]["effective"])
+                d_stam = int(round(stam_max * 0.20))
+                d_mana = int(round(mana_max * 0.10))
+                inst.character.stamina_current = int(
+                    inst.character.stamina_current) + d_stam
+                inst.character.mana_current = int(
+                    inst.character.mana_current) + d_mana
+                self._sanity_check_character(inst.character)
+                msgs.append(
+                    f"{inst.character.name} rested "
+                    f"(+{d_stam} stamina, +{d_mana} mana)")
 
         # --- stamina + mana costs for offensive actions ---
         # v3.10: use the same per-side picker as the damage formula so
