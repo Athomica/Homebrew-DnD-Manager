@@ -11,6 +11,10 @@
   edit had moved the tab's state wiring (and the DM/Developer view button
   setup) into the wrong method, leaving the button blank and crashing the app
   when it was clicked. The wiring is restored.
+- **Encounter tab no longer crashes when opening a save.** The persistent
+  "Opponent?" button was being deleted during the tab's refresh and then
+  reused on the next refresh (`RuntimeError: wrapped C/C++ object ... has been
+  deleted`). It is now preserved across refreshes like the other placeholders.
 
 ## v3.1.1 — Bug-fix and refinement pass
 
