@@ -29,7 +29,8 @@ def _passive_label(p) -> str:
     `change_turn(+1)` click."""
     unit = "%" if getattr(p, "scope", "fixed") == "percent" else ""
     tag = "✓" if getattr(p, "active", True) else "·"
-    tr = int(getattr(p, "turns_remaining", -1) or -1)
+    from math_engine import passive_turns_remaining
+    tr = passive_turns_remaining(p)
     if tr < 0:
         dur_str = "permanent"
     elif tr == 0:

@@ -1,5 +1,40 @@
 # DnD Manager Changelog
 
+## v3.10.13 — Invariant pipeline (sequencing pass 1/3)
+
+First of three sequenced passes. Extracts the ad-hoc
+`_sanity_check_character` into a dedicated, ordered, idempotent
+pipeline so the program repairs character state in a predictable
+sequence — and so future mechanics have an obvious slot to live in.
+
+- **New `src/invariants.py`**: a staged pipeline
+  (`drop_expired_passives` → `dedup_character_passives` →
+  `enforce_proc_count_floor` → `clamp_vitals`) run via
+  `run_character_invariants(character, ctx)`. Each stage is
+  idempotent; the module docstring documents which stage a new
+  mechanic belongs to (passive / field / clamp).
+- **Wired into every mutation entrypoint**: `apply_hp_loss`,
+  `change_turn`, `resolve_conflict` (rest), `set_active_form`,
+  `use_item_in_conflict`, and a `_sanity_check_all` pass on load so
+  legacy saves come up consistent. `_sanity_check_character` is now
+  a thin wrapper over the pipeline.
+- **Bug fixed — expired passives never dropped**: the old guard
+  `int(getattr(p, "turns_remaining", -1) or -1) != 0` coerced a
+  legitimate `0` (expired) into `-1` (permanent) via the falsy-`or`
+  trap, so the safety-net drop never fired and an expired passive
+  could still contribute to effective max if it lingered. Replaced
+  with `passive_turns_remaining()` (math_engine) / `_turns_remaining`
+  (invariants) which distinguish None from 0. Fixed the same idiom in
+  `effective_value`, `per_turn_forecast`, and the three UI label
+  builders.
+- **Bug fixed — item-use clamp ran too early**: `use_item_in_conflict`
+  clamped current vitals before removing the consumed item from
+  inventory, so using the last copy of a +max-granting item clamped
+  against the still-held (higher) ceiling. The pipeline now runs
+  after the inventory mutation for the authoritative clamp.
+- 5 new tests for the pipeline (drop / dedup / proc floor / clamp /
+  idempotence); 46 total pass.
+
 ## v3.10.12 — Rest action
 
 New "Rest" action available alongside Attack / Block / Cast /

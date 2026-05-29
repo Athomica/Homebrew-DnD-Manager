@@ -17,6 +17,7 @@ from typing import Optional, Any
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 
 import math_engine as me
+from invariants import InvariantContext, run_character_invariants
 from models import (
     AppState, Character, Weapon, Armor, Spell, SpellEffect, Item, Form,
     Passive, InventoryEntry, Encounter, EncounterInstance,
@@ -412,10 +413,34 @@ class StateManager(QObject):
         d = json.loads(path.read_text())
         self.state = hydrate_app_state(d)
         self._apply_modifiers_to_engine()
+        # v3.10.13: bring every loaded character up to the current
+        # invariants. Legacy saves predating proc_count / max-only
+        # passives / vital clamping arrive consistent rather than
+        # tripping a downstream consumer.
+        self._sanity_check_all()
         self._current_save_path = path
         self.lists_changed.emit()
         self.state_changed.emit()
         self.encounter_changed.emit()
+
+    def _all_characters(self):
+        """v3.10.13: iterate every Character the state owns — the three
+        roster groups plus the live instances inside every encounter."""
+        for group in (self.state.party, self.state.mobs, self.state.npcs):
+            for c in group:
+                yield c
+        for enc in self.state.encounters:
+            for inst in enc.instances:
+                if inst.character is not None:
+                    yield inst.character
+
+    def _sanity_check_all(self) -> None:
+        """Run the invariant pipeline over every character in the state.
+        Used after a load; the engine modifiers must already be set so
+        effective-max clamping uses the right scaling."""
+        ctx = self._invariant_ctx()
+        for c in self._all_characters():
+            run_character_invariants(c, ctx)
 
     def list_saves(self) -> list[tuple[Path, str, str]]:
         out: list[tuple[Path, str, str]] = []
@@ -666,6 +691,9 @@ class StateManager(QObject):
         old = character.health_current
         character.health_current = max(0, character.health_current - int(round(loss)))
         character.last_hp_loss = loss
+        # v3.10.13: re-establish invariants after the mutation (clamps
+        # to the legal range, drops any just-expired passives).
+        self._sanity_check_character(character)
         self.log_event("hp_loss",
                        f"{character.name} took {int(round(loss))} HP "
                        f"({old} -> {character.health_current})",
@@ -714,6 +742,9 @@ class StateManager(QObject):
             character.mana_current -= mana_cost
             character.health_current -= health_cost
         character.active_form_id = form_id
+        # v3.10.13: a form change shifts the vital max multiplier, so
+        # re-clamp current vitals into the new effective range.
+        self._sanity_check_character(character)
         name = target_form.name if target_form else "(none)"
         self.log_event("form_changed",
                        f"{character.name} switched form to '{name}'",
@@ -1059,33 +1090,27 @@ class StateManager(QObject):
         if instance_id:
             self.assign_to_side(instance_id, "right")
 
-    def _sanity_check_character(self, character: Character) -> None:
-        """v3.10.11: validate and repair a character's vital state.
+    def _invariant_ctx(self) -> InvariantContext:
+        """v3.10.13: bundle the global lists the invariant pipeline
+        needs to compute effective max (which depends on equipped gear
+        and held items)."""
+        return InvariantContext(
+            weapons=self.state.weapons, armors=self.state.armors,
+            spells=self.state.spells, items=self.state.items)
 
-        Run after any operation that could leave the character in an
-        inconsistent state — turn ticks, passive edits, HP-loss
-        application, etc. Currently:
-          - Drops passives whose `turns_remaining == 0` (expired but
-            still on the list).
-          - Clamps every current vital to `[0, effective_max]` for
-            that vital.
-          - Ensures `proc_count >= 1`.
-        Idempotent and cheap; safe to call defensively.
-        """
-        # Drop expired passives (turns_remaining == 0). Permanent (-1)
-        # and active non-permanent (>0) survive.
-        character.passives = [
-            p for p in character.passives
-            if int(getattr(p, "turns_remaining", -1) or -1) != 0
-        ]
-        for p in character.passives:
-            if int(getattr(p, "proc_count", 1) or 0) < 1:
-                p.proc_count = 1
-        for v in ("health", "stamina", "mana"):
-            cur_attr = f"{v}_current"
-            cur = int(getattr(character, cur_attr, 0) or 0)
-            eff_max = self._effective_max(character, v)
-            setattr(character, cur_attr, max(0, min(cur, eff_max)))
+    def _sanity_check_character(self, character: Character) -> None:
+        """v3.10.13: run the character invariant pipeline.
+
+        Thin wrapper over `invariants.run_character_invariants` kept for
+        the existing call sites. The pipeline drops expired passives,
+        dedupes passive instances, floors proc_count, and clamps every
+        current vital into `[0, effective_max]`. Idempotent and cheap;
+        safe to call defensively after any mutation.
+
+        New mechanics that need to repair character state belong in
+        `invariants.INVARIANTS`, not here — see that module's docstring
+        for which stage to slot them into."""
+        run_character_invariants(character, self._invariant_ctx())
 
     def _effective_max(self, character: Character, vital: str) -> int:
         """v3.9.5: shared helper — return the EFFECTIVE max of a vital
@@ -1142,6 +1167,12 @@ class StateManager(QObject):
         entry.quantity -= 1
         if entry.quantity <= 0:
             inst.character.inventory.remove(entry)
+        # v3.10.13: re-clamp AFTER the inventory mutation. If the
+        # consumed item granted a +max passive while held, removing the
+        # last copy lowers the effective max — the inline clamp above
+        # ran against the higher (still-held) max, so the pipeline gets
+        # the final, authoritative word.
+        self._sanity_check_character(inst.character)
         track = enc.items_used_left if side == "left" else enc.items_used_right
         track.append(item_id)
         self.log_event(

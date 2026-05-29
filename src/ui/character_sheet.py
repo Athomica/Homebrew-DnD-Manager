@@ -1621,7 +1621,7 @@ class CharacterSheet(QWidget):
             # "Nt left" hint shrinks as turns advance.
             turns_left = None
             for p in ticking:
-                tr = int(getattr(p, "turns_remaining", -1) or -1)
+                tr = me.passive_turns_remaining(p)
                 if tr > 0:
                     turns_left = tr if turns_left is None else min(turns_left, tr)
             bar.set_tick_forecast(delta, turns_left)

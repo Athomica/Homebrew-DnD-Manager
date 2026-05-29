@@ -53,6 +53,14 @@ def round_to_half(x: float) -> float:
     return round(x * 2) / 2
 
 
+def passive_turns_remaining(p) -> int:
+    """Read a passive's turns_remaining, treating missing/None as -1
+    (permanent). Avoids the `value or -1` trap that silently coerces a
+    legitimate 0 (expired) into -1 (permanent)."""
+    tr = getattr(p, "turns_remaining", -1)
+    return -1 if tr is None else int(tr)
+
+
 # ---------------------------------------------------------------------------
 # Section 5.2 - Level
 # ---------------------------------------------------------------------------
@@ -481,7 +489,7 @@ def per_turn_forecast(character: Character, vital: str,
         if not getattr(p, "active", True):
             next_state.append(p)
             continue
-        tr = int(getattr(p, "turns_remaining", -1) or -1)
+        tr = passive_turns_remaining(p)
         if tr < 0:
             next_state.append(p)
             continue
@@ -526,8 +534,7 @@ def effective_value(base: float, key: str, passives: list) -> tuple[float, float
         # with turns_remaining > 0) contributes to the effective max
         # while it's alive. Non-permanent passives that have already
         # expired (turns_remaining == 0) drop out.
-        tr = int(getattr(p, "turns_remaining", -1) or -1)
-        if tr == 0:
+        if passive_turns_remaining(p) == 0:
             continue
         # v3.10.11: each proc stacks the effect. A non-permanent
         # passive's contribution is `amount * proc_count`, where

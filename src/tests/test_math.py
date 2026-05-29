@@ -564,5 +564,75 @@ class TestEncounterSystem(unittest.TestCase):
                           "Orphan template should not be promoted to unique")
 
 
+class TestInvariants(unittest.TestCase):
+    """v3.10.13: the character invariant pipeline."""
+
+    def setUp(self):
+        me.set_modifiers({})
+        from invariants import InvariantContext
+        self.ctx = InvariantContext()
+
+    def test_drop_expired_passives(self):
+        from models import Passive
+        import invariants as inv
+        c = Character(name="X", health_max=100, health_current=100)
+        c.passives = [
+            Passive(name="perm", affected_value="health_max",
+                    amount=10, duration="permanent"),
+            Passive(name="expired", affected_value="health_max",
+                    amount=10, turns_remaining=0, duration="turns:2"),
+            Passive(name="live", affected_value="health_max",
+                    amount=10, turns_remaining=3, duration="turns:3"),
+        ]
+        inv.run_character_invariants(c, self.ctx)
+        names = {p.name for p in c.passives}
+        self.assertEqual(names, {"perm", "live"})
+
+    def test_dedup_passives_by_id(self):
+        from models import Passive
+        import invariants as inv
+        c = Character(name="X", health_max=100, health_current=100)
+        p = Passive(name="dup", affected_value="health_max", amount=5,
+                    duration="permanent")
+        c.passives = [p, p]  # same id twice
+        inv.run_character_invariants(c, self.ctx)
+        self.assertEqual(len(c.passives), 1)
+
+    def test_proc_count_floor(self):
+        from models import Passive
+        import invariants as inv
+        c = Character(name="X", health_max=100, health_current=100)
+        bad = Passive(name="z", affected_value="health_max", amount=5,
+                      duration="permanent")
+        bad.proc_count = 0
+        c.passives = [bad]
+        inv.run_character_invariants(c, self.ctx)
+        self.assertEqual(c.passives[0].proc_count, 1)
+
+    def test_clamp_vitals_into_range(self):
+        import invariants as inv
+        # current above max → clamped down; below 0 → clamped up.
+        c = Character(name="X", health_max=100, health_current=999,
+                      stamina_max=50, stamina_current=-5,
+                      mana_max=30, mana_current=30)
+        inv.run_character_invariants(c, self.ctx)
+        self.assertEqual(c.health_current, 100)
+        self.assertEqual(c.stamina_current, 0)
+        self.assertEqual(c.mana_current, 30)
+
+    def test_pipeline_is_idempotent(self):
+        from models import Passive
+        import invariants as inv
+        c = Character(name="X", health_max=100, health_current=120)
+        c.passives = [Passive(name="e", affected_value="health_max",
+                              amount=5, turns_remaining=0, duration="turns:1")]
+        inv.run_character_invariants(c, self.ctx)
+        snapshot_hp = c.health_current
+        snapshot_n = len(c.passives)
+        inv.run_character_invariants(c, self.ctx)
+        self.assertEqual(c.health_current, snapshot_hp)
+        self.assertEqual(len(c.passives), snapshot_n)
+
+
 if __name__ == "__main__":
     unittest.main()
