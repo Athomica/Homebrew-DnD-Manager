@@ -15,6 +15,13 @@
   "Opponent?" button was being deleted during the tab's refresh and then
   reused on the next refresh (`RuntimeError: wrapped C/C++ object ... has been
   deleted`). It is now preserved across refreshes like the other placeholders.
+- **The app no longer dies silently on an unexpected error.** Because the
+  release build is a windowed binary with no console, a stray exception in a
+  signal handler (e.g. while editing a value) used to abort the whole process
+  with nothing printed anywhere. Errors are now caught, written to
+  `~/.local/share/dnd-manager/crash.log`, and the app keeps running. Native
+  crashes are captured there too. If something still misbehaves, that log now
+  has the details.
 
 ## v3.1.1 — Bug-fix and refinement pass
 
