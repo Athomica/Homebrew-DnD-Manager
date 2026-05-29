@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# v3.10.19: ldconfig lives in /usr/sbin (or /sbin) on most distros and
+# isn't on the default PATH when this script is invoked through a
+# curl-piped installer or a minimal shell. Augment PATH so the lookup
+# below can actually find the libraries — previously a missing
+# ldconfig produced empty output, which made every lib look "missing"
+# and printed a confusing "install everything" message even when the
+# libraries were present.
+export PATH="/usr/sbin:/sbin:$PATH"
+
 REQUIRED_LIBS=(
     "libwayland-client.so.0"
     "libxcb.so.1"
@@ -8,11 +17,35 @@ REQUIRED_LIBS=(
     "libxcb-cursor.so.0"
 )
 
+# Standard library search paths to fall back to if ldconfig isn't
+# available at all (some minimal containers strip glibc tools).
+FALLBACK_LIBDIRS=(
+    /usr/lib /usr/lib64 /lib /lib64
+    /usr/lib/x86_64-linux-gnu
+    /usr/lib/aarch64-linux-gnu
+)
+
+have_lib() {
+    local lib="$1"
+    if command -v ldconfig >/dev/null 2>&1; then
+        if ldconfig -p 2>/dev/null | grep -q "$lib"; then
+            return 0
+        fi
+    fi
+    # Fallback: probe well-known library directories directly. This
+    # catches systems where ldconfig is missing or its cache is stale.
+    local d
+    for d in "${FALLBACK_LIBDIRS[@]}"; do
+        if [ -e "$d/$lib" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 MISSING=()
 for lib in "${REQUIRED_LIBS[@]}"; do
-    if ! ldconfig -p | grep -q "$lib"; then
-        MISSING+=("$lib")
-    fi
+    have_lib "$lib" || MISSING+=("$lib")
 done
 
 if [ ${#MISSING[@]} -gt 0 ]; then

@@ -19,6 +19,13 @@
 
 set -euo pipefail
 
+# v3.10.19: ldconfig (and other system tools) live in /usr/sbin on most
+# distros, which isn't on the default PATH when this script runs under
+# `curl | bash`. Augment PATH so the build-time dependency check can
+# actually find ldconfig — previously a missing ldconfig silently made
+# every required library look absent.
+export PATH="/usr/sbin:/sbin:$PATH"
+
 REPO_URL="${REPO_URL:-https://github.com/Athomica/Homebrew-DnD-Manager.git}"
 BRANCH="${BRANCH:-claude/peaceful-heisenberg-ABLtK}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/dnd-manager}"
