@@ -641,16 +641,16 @@ class StateManager(QObject):
         clone = copy.deepcopy(src)
         clone.id = new_id("c")
         clone.name = f"{src.name} (copy)"
-        # v3.10.17: a fresh duplicate must not inherit the source's
+        # v3.10.17/18: a fresh duplicate must not inherit the source's
         # accumulated battle stats — those are per-encounter history, not
-        # part of the character's identity. Reset to defaults so the copy
-        # starts clean (mirrors how a new encounter instance begins).
+        # part of the character's identity. Reset only fields that
+        # actually live on Character (dice_history is on
+        # EncounterInstance, not Character, so it isn't reset here).
         clone.kill_points = 0
         clone.solo_kp = 0
         clone.participants = 1
         clone.dmg_received = 0
         clone.last_hp_loss = 0.0
-        clone.dice_history = []
         self._list_for(src.role).append(clone)
         self.log_event("character_duplicated",
                        f"Duplicated '{src.name}' -> '{clone.name}'",
@@ -658,11 +658,29 @@ class StateManager(QObject):
         self.lists_changed.emit()
         return clone
 
+    # v3.10.18: which Character fields touch vital state and therefore
+    # need the invariant pipeline to run after a direct edit. Editing
+    # `health_max` below `health_current` should clamp current down;
+    # editing `health_current` above the effective max should clamp it
+    # in. Out of scope: name, race, kp_value, dice, sp, etc.
+    _VITAL_FIELDS = {
+        "health_current", "stamina_current", "mana_current",
+        "health_max", "stamina_max", "mana_max",
+        "active_form_id",  # form mults change effective max
+    }
+
     def set_character_field(self, character: Character, field_name: str, value: Any) -> None:
         old = getattr(character, field_name, None)
         if old == value:
             return
         setattr(character, field_name, value)
+        # v3.10.18 failsafe: if the edited field changes a vital ceiling
+        # or value, run the invariant pipeline so current vitals stay
+        # within [0, effective_max] and no expired passives leak
+        # through. Skipped for non-vital fields to avoid the cost on
+        # name / age / SP keystrokes.
+        if field_name in self._VITAL_FIELDS:
+            self._sanity_check_character(character)
         self.log_event("field_changed",
                        f"{character.name}.{field_name}: {old} -> {value}",
                        character_id=character.id, category="change",

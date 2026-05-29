@@ -1,5 +1,33 @@
 # DnD Manager Changelog
 
+## v3.10.18 — Editable current vitals in conflict; duplicate buttons
+
+Two user-reported bugs fixed.
+
+- **Current HP/SP/MP can now be edited during a conflict.** The
+  conflict mode previously hid the entire cur/max spinbox row to
+  prevent direct edits to the max, which also hid the current input —
+  so when a buff raised the effective max, the GM had no way to bump
+  the current value up to match. The card now keeps the **current**
+  input visible during conflict (read-write, cap = effective max),
+  while the **max** input stays hidden (max changes belong to passives,
+  not direct edits). Player View still hides everything.
+- **Duplicate buttons in the Lists tabs and Global Character List**
+  silently did nothing when no row was selected. The button was
+  always enabled but `_current_id` was None, so `_on_duplicate`
+  early-returned with no feedback. All five Duplicate buttons
+  (weapons / armors / spells / items / characters) plus the matching
+  Remove and Archive buttons are now disabled until a row is
+  selected, and re-enable on selection.
+- `set_character_field` now runs the invariant pipeline when a vital
+  field is edited (the missed entrypoint from the v3.10.17 audit).
+  Lowering health_max in the editor clamps health_current down; raising
+  current within a buff-raised effective max sticks.
+- Fixed a latent `dice_history` typo in v3.10.17's
+  `duplicate_character` (it referenced a field that lives on
+  `EncounterInstance`, not `Character` — Python's dynamic attribute
+  setting let it pass silently, but the reset never actually applied).
+
 ## v3.10.17 — System-wide audit: bug fixes, failsafes, cleanup
 
 A full pass over the three core logic modules (math_engine, state,

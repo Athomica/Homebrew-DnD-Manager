@@ -56,14 +56,18 @@ class WeaponsListTab(QWidget):
         toolbar = QHBoxLayout()
         add_w = QPushButton("+ Weapon"); add_w.setProperty("role", "primary")
         add_s = QPushButton("+ Shield"); add_s.setProperty("role", "primary")
-        dup = QPushButton("Duplicate")
-        rm = QPushButton("- Remove"); rm.setProperty("role", "danger")
+        # v3.10.18: keep refs so we can enable/disable on selection.
+        # Previously the buttons were always enabled; clicking Duplicate
+        # before selecting a row silently did nothing — looked broken.
+        self._dup_btn = QPushButton("Duplicate")
+        self._rm_btn = QPushButton("- Remove"); self._rm_btn.setProperty("role", "danger")
         add_w.clicked.connect(lambda: self._on_add(is_shield=False))
         add_s.clicked.connect(lambda: self._on_add(is_shield=True))
-        dup.clicked.connect(self._on_duplicate)
-        rm.clicked.connect(self._on_remove)
+        self._dup_btn.clicked.connect(self._on_duplicate)
+        self._rm_btn.clicked.connect(self._on_remove)
+        self._dup_btn.setEnabled(False); self._rm_btn.setEnabled(False)
         toolbar.addWidget(add_w); toolbar.addWidget(add_s)
-        toolbar.addWidget(dup); toolbar.addWidget(rm)
+        toolbar.addWidget(self._dup_btn); toolbar.addWidget(self._rm_btn)
         toolbar.addSpacing(20)
 
         bg = QButtonGroup(self)
@@ -204,6 +208,9 @@ class WeaponsListTab(QWidget):
 
     def _on_select(self, row: int) -> None:
         if row < 0:
+            self._current_id = None
+            self._dup_btn.setEnabled(False)
+            self._rm_btn.setEnabled(False)
             return
         item = self._list.item(row)
         if item is None:
@@ -213,6 +220,8 @@ class WeaponsListTab(QWidget):
         if not w:
             return
         self._current_id = wid
+        self._dup_btn.setEnabled(True)
+        self._rm_btn.setEnabled(True)
         self._name_in.setText(w.name)
         self._stamina_in.setValue(w.stamina_cost)
         self._mana_in.setValue(getattr(w, "mana_cost", 0))
@@ -297,12 +306,13 @@ class ArmorListTab(QWidget):
 
         toolbar = QHBoxLayout()
         add = QPushButton("+ Armor"); add.setProperty("role", "primary")
-        dup = QPushButton("Duplicate")
-        rm = QPushButton("- Remove"); rm.setProperty("role", "danger")
+        self._dup_btn = QPushButton("Duplicate")
+        self._rm_btn = QPushButton("- Remove"); self._rm_btn.setProperty("role", "danger")
         add.clicked.connect(self._on_add)
-        dup.clicked.connect(self._on_duplicate)
-        rm.clicked.connect(self._on_remove)
-        toolbar.addWidget(add); toolbar.addWidget(dup); toolbar.addWidget(rm)
+        self._dup_btn.clicked.connect(self._on_duplicate)
+        self._rm_btn.clicked.connect(self._on_remove)
+        self._dup_btn.setEnabled(False); self._rm_btn.setEnabled(False)
+        toolbar.addWidget(add); toolbar.addWidget(self._dup_btn); toolbar.addWidget(self._rm_btn)
         toolbar.addStretch(1)
         outer.addLayout(toolbar)
 
@@ -376,6 +386,9 @@ class ArmorListTab(QWidget):
 
     def _on_select(self, row: int) -> None:
         if row < 0:
+            self._current_id = None
+            self._dup_btn.setEnabled(False)
+            self._rm_btn.setEnabled(False)
             return
         item = self._list.item(row)
         if item is None:
@@ -385,6 +398,8 @@ class ArmorListTab(QWidget):
         if not a:
             return
         self._current_id = aid
+        self._dup_btn.setEnabled(True)
+        self._rm_btn.setEnabled(True)
         self._name_in.setText(a.name)
         idx = ARMOR_SLOTS.index(a.slot) if a.slot in ARMOR_SLOTS else 0
         self._slot_in.setCurrentIndex(idx)
@@ -561,10 +576,15 @@ class SpellsListTab(QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         toolbar = QHBoxLayout()
         add = QPushButton("+ Spell"); add.setProperty("role", "primary")
-        dup = QPushButton("Duplicate")
-        rm = QPushButton("- Remove"); rm.setProperty("role", "danger")
-        add.clicked.connect(self._on_add); dup.clicked.connect(self._on_duplicate); rm.clicked.connect(self._on_remove)
-        toolbar.addWidget(add); toolbar.addWidget(dup); toolbar.addWidget(rm); toolbar.addStretch(1)
+        self._dup_btn = QPushButton("Duplicate")
+        self._rm_btn = QPushButton("- Remove"); self._rm_btn.setProperty("role", "danger")
+        add.clicked.connect(self._on_add)
+        self._dup_btn.clicked.connect(self._on_duplicate)
+        self._rm_btn.clicked.connect(self._on_remove)
+        self._dup_btn.setEnabled(False); self._rm_btn.setEnabled(False)
+        toolbar.addWidget(add)
+        toolbar.addWidget(self._dup_btn); toolbar.addWidget(self._rm_btn)
+        toolbar.addStretch(1)
         outer.addLayout(toolbar)
 
         outer.addLayout(_make_search_row("name or school…", self._on_search))
@@ -663,6 +683,9 @@ class SpellsListTab(QWidget):
 
     def _on_select(self, row: int) -> None:
         if row < 0:
+            self._current_id = None
+            self._dup_btn.setEnabled(False)
+            self._rm_btn.setEnabled(False)
             return
         item = self._list.item(row)
         if item is None:
@@ -672,6 +695,8 @@ class SpellsListTab(QWidget):
         if not s:
             return
         self._current_id = sid
+        self._dup_btn.setEnabled(True)
+        self._rm_btn.setEnabled(True)
         self._name_in.setText(s.name)
         self._mana_in.setValue(s.mana_cost)
         self._stamina_in.setValue(getattr(s, "stamina_cost", 0))
@@ -781,10 +806,15 @@ class ItemsListTab(QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         toolbar = QHBoxLayout()
         add = QPushButton("+ Item"); add.setProperty("role", "primary")
-        dup = QPushButton("Duplicate")
-        rm = QPushButton("- Remove"); rm.setProperty("role", "danger")
-        add.clicked.connect(self._on_add); dup.clicked.connect(self._on_duplicate); rm.clicked.connect(self._on_remove)
-        toolbar.addWidget(add); toolbar.addWidget(dup); toolbar.addWidget(rm); toolbar.addStretch(1)
+        self._dup_btn = QPushButton("Duplicate")
+        self._rm_btn = QPushButton("- Remove"); self._rm_btn.setProperty("role", "danger")
+        add.clicked.connect(self._on_add)
+        self._dup_btn.clicked.connect(self._on_duplicate)
+        self._rm_btn.clicked.connect(self._on_remove)
+        self._dup_btn.setEnabled(False); self._rm_btn.setEnabled(False)
+        toolbar.addWidget(add)
+        toolbar.addWidget(self._dup_btn); toolbar.addWidget(self._rm_btn)
+        toolbar.addStretch(1)
         outer.addLayout(toolbar)
 
         outer.addLayout(_make_search_row("name or tag…", self._on_search))
@@ -868,6 +898,9 @@ class ItemsListTab(QWidget):
 
     def _on_select(self, row: int) -> None:
         if row < 0:
+            self._current_id = None
+            self._dup_btn.setEnabled(False)
+            self._rm_btn.setEnabled(False)
             return
         item = self._list.item(row)
         if item is None:
@@ -877,6 +910,8 @@ class ItemsListTab(QWidget):
         if not it:
             return
         self._current_id = iid
+        self._dup_btn.setEnabled(True)
+        self._rm_btn.setEnabled(True)
         self._name_in.setText(it.name)
         self._slot_count_in.setValue(it.slot_count)
         self._tags_in.setText(",".join(it.tags))

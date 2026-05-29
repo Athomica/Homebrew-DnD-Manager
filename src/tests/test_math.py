@@ -642,7 +642,7 @@ class TestAuditFixesV31017(unittest.TestCase):
         src = Character(name="Vet", role="mob")
         src.kill_points = 50; src.solo_kp = 10
         src.participants = 4; src.dmg_received = 99
-        src.last_hp_loss = 12.0; src.dice_history = [3, 4]
+        src.last_hp_loss = 12.0
         self.sm.state.mobs.append(src)
         clone = self.sm.duplicate_character(src.id)
         self.assertIsNotNone(clone)
@@ -651,7 +651,50 @@ class TestAuditFixesV31017(unittest.TestCase):
         self.assertEqual(clone.participants, 1)
         self.assertEqual(clone.dmg_received, 0)
         self.assertEqual(clone.last_hp_loss, 0.0)
-        self.assertEqual(clone.dice_history, [])
+        # Distinct id and "(copy)" suffix.
+        self.assertNotEqual(clone.id, src.id)
+        self.assertEqual(clone.name, "Vet (copy)")
+
+    # -- v3.10.18 regressions ----------------------------------------
+    def test_set_character_field_clamps_current_to_new_max(self):
+        # Lowering health_max via the field setter must clamp the
+        # current vital down to the new ceiling.
+        c = Character(name="X", role="party",
+                      health_max=200, health_current=180)
+        self.sm.state.party.append(c)
+        self.sm.set_character_field(c, "health_max", 100)
+        self.assertEqual(c.health_max, 100)
+        self.assertEqual(c.health_current, 100)
+
+    def test_set_character_field_current_within_effective_max(self):
+        # Raising current to a value inside the effective max should
+        # stick (no over-clamping). The user must be able to fill HP up
+        # to a buff-raised ceiling.
+        from models import Passive
+        c = Character(name="X", role="party",
+                      health_max=100, health_current=80)
+        c.passives.append(Passive(name="Vigor", amount=50, scope="fixed",
+                                   affected_value="health_max",
+                                   duration="permanent"))
+        self.sm.state.party.append(c)
+        self.sm.set_character_field(c, "health_current", 130)
+        self.assertEqual(c.health_current, 130)
+
+    def test_duplicate_buttons_disabled_without_selection(self):
+        # No selection means Duplicate must be disabled, so clicking
+        # silently does nothing — exactly the symptom the user
+        # reported. With selection, it becomes enabled.
+        from ui.lists_tab import WeaponsListTab
+        from models import Weapon
+        self.sm.state.weapons.append(Weapon(name="Sword", damage=10))
+        tab = WeaponsListTab(self.sm)
+        # On construction with one entry, the first row is auto-selected.
+        self.assertTrue(tab._dup_btn.isEnabled())
+        # Clear the selection -> Duplicate disables.
+        tab._list.clearSelection()
+        tab._list.setCurrentRow(-1)
+        tab._on_select(-1)
+        self.assertFalse(tab._dup_btn.isEnabled())
 
     # -- state: convert_to_template fills to EFFECTIVE max -----------
     def test_convert_to_template_fills_to_effective_max(self):

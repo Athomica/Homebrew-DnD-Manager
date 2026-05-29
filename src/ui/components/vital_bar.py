@@ -125,18 +125,29 @@ class VitalBar(QWidget):
             w.blockSignals(False)
         self._refresh_bar(animate=animate, prev_value=prev)
 
-    def set_inputs_visible(self, visible: bool) -> None:
-        """v3.10: hide the editable cur/max spinbox row. Used by:
-          - the compact card during a conflict (GM doesn't need to
-            tweak vitals mid-fight — damage applies through the
-            conflict-resolve, items / potions through Use Item),
-          - the Player View at all times (players never see the
-            editable controls).
+    def set_inputs_visible(self, visible: bool,
+                            current_visible: bool | None = None) -> None:
+        """v3.10.18: hide the editable cur/max spinbox row, with an
+        optional override for the CURRENT input.
+
+        - Player View hides everything (`visible=False`).
+        - GM conflict mode wants `visible=True` (so the GM can still
+          adjust current HP to match a buff-raised max) but `max` stays
+          read-only and unobtrusive — pass `current_visible=True` and
+          `visible=False` for the max row, OR pass `visible=True` and
+          rely on the existing `setReadOnly` on the max input to mark it
+          immutable. Use `current_visible` to control the current row
+          independently when needed.
         The bar itself, the inline ≈N label, and the tick forecast
-        all stay visible."""
-        for w in (self._cur_label, self._current_input,
-                   self._max_label, self._max_input):
-            w.setVisible(visible)
+        all stay visible regardless."""
+        if current_visible is None:
+            current_visible = visible
+        # Current row
+        self._cur_label.setVisible(current_visible)
+        self._current_input.setVisible(current_visible)
+        # Max row
+        self._max_label.setVisible(visible)
+        self._max_input.setVisible(visible)
 
     def set_conflict_mode(self, in_conflict: bool) -> None:
         """v3.9.1 (B3): during a conflict, the effective values are

@@ -90,6 +90,11 @@ class CharacterListSubTab(QWidget):
         self._rm_btn = QPushButton("- Remove")
         self._rm_btn.setProperty("role", "danger")
         self._rm_btn.clicked.connect(self._on_remove)
+        # v3.10.18: disabled until a row is selected — otherwise the
+        # buttons look clickable but silently do nothing.
+        self._dup_btn.setEnabled(False)
+        self._archive_btn.setEnabled(False)
+        self._rm_btn.setEnabled(False)
         toolbar.addWidget(self._add_btn)
         toolbar.addWidget(self._dup_btn)
         if role != "party":
@@ -167,6 +172,10 @@ class CharacterListSubTab(QWidget):
     def _on_selection_change(self, row: int) -> None:
         if row < 0:
             self._set_sheet(None)
+            self._current_id = None
+            self._dup_btn.setEnabled(False)
+            self._archive_btn.setEnabled(False)
+            self._rm_btn.setEnabled(False)
             return
         item = self._list.item(row)
         if not item:
@@ -175,6 +184,12 @@ class CharacterListSubTab(QWidget):
         if not cid:
             return
         self._current_id = cid
+        self._dup_btn.setEnabled(True)
+        self._archive_btn.setEnabled(True)
+        # Removal is blocked while the character is in an encounter
+        # (the lock icon already signals this); preserve that rule.
+        in_enc = self._state.is_character_in_encounter(cid)
+        self._rm_btn.setEnabled(not in_enc)
         char = self._state.find_character(cid)
         self._set_sheet(char)
 

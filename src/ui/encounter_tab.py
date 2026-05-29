@@ -1270,11 +1270,19 @@ class CompactCharacterCard(QFrame):
         in_conflict = bool(enc and enc.in_conflict_mode)
         for bar in (self._hp_bar, self._stam_bar, self._mana_bar):
             bar.set_conflict_mode(in_conflict)
-            # v3.10: hide cur/max spinboxes in conflict and always in
-            # the Player View. The progress bar + ≈N label convey what
-            # everyone needs to see; the editable inputs reappear in
-            # the GM card when the conflict ends.
-            bar.set_inputs_visible(not (in_conflict or self._viewer_mode))
+            # v3.10.18: Player View hides everything (players never see
+            # editable controls). In GM conflict mode, keep the CURRENT
+            # input visible — the GM may need to bump it up to match a
+            # buff-raised effective max, or down to record an
+            # out-of-flow injury — while the max row is hidden (max
+            # changes during conflict should come through passives, not
+            # direct edits).
+            if self._viewer_mode:
+                bar.set_inputs_visible(False)
+            elif in_conflict:
+                bar.set_inputs_visible(False, current_visible=True)
+            else:
+                bar.set_inputs_visible(True)
         # v3.9.2 (B4): per-turn forecast for bleed/regen-style passives.
         all_p = me.collect_active_passives(
             c, self._state.state.weapons, self._state.state.armors,
